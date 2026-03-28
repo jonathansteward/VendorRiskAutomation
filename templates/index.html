@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vendor Risk Assessment Platform</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    header {
+      background: linear-gradient(135deg, #1F3864 0%, #2F5496 100%);
+      color: white;
+      padding: 0 2rem;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+    }
+    header .brand { display: flex; align-items: center; gap: 12px; }
+    header .brand svg { width: 28px; height: 28px; opacity: .9; }
+    header h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: .3px; }
+    header .badge {
+      font-size: .7rem; background: rgba(255,255,255,.15);
+      border: 1px solid rgba(255,255,255,.3);
+      padding: 3px 10px; border-radius: 20px; letter-spacing: .5px;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────── */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    /* ── Cards ────────────────────────────────────────────────── */
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08), 0 4px 20px rgba(0,0,0,.05);
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 1rem 1.4rem;
+      background: #1F3864;
+      color: white;
+      font-size: .85rem;
+      font-weight: 600;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-body { padding: 1.4rem; }
+
+    /* ── Form ─────────────────────────────────────────────────── */
+    .section-label {
+      font-size: .7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      color: #2F5496;
+      margin: 1.2rem 0 .6rem;
+      padding-bottom: .4rem;
+      border-bottom: 2px solid #e8edf5;
+    }
+    .section-label:first-child { margin-top: 0; }
+
+    .form-group { margin-bottom: .9rem; }
+    label {
+      display: block;
+      font-size: .8rem;
+      font-weight: 600;
+      color: #444;
+      margin-bottom: .3rem;
+    }
+    label span { font-weight: 400; color: #888; font-size: .75rem; }
+    input[type="text"], input[type="url"], input[type="number"], textarea, select {
+      width: 100%;
+      padding: .55rem .75rem;
+      border: 1.5px solid #d0d7e3;
+      border-radius: 7px;
+      font-size: .875rem;
+      color: #1a1a2e;
+      background: #fafbfd;
+      transition: border-color .2s, box-shadow .2s;
+      outline: none;
+    }
+    input:focus, textarea:focus {
+      border-color: #2F5496;
+      box-shadow: 0 0 0 3px rgba(47,84,150,.1);
+      background: white;
+    }
+    textarea { resize: vertical; min-height: 72px; }
+
+    .fair-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .75rem;
+    }
+    .fair-hint {
+      font-size: .72rem;
+      color: #888;
+      margin-top: .25rem;
+    }
+
+    /* ── Threat Intel Info (auto-fetched, shown in results) ──────── */
+    .threat-intel-card {
+      background: #edf2fb; border: 1px solid #c5d3ee; border-radius: 8px;
+      padding: .75rem 1rem; margin-bottom: 1rem; font-size: .78rem;
+    }
+    .threat-intel-title {
+      font-size: .73rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .5px; color: #2F5496; margin-bottom: .5rem;
+    }
+    .threat-intel-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: .3rem .75rem;
+    }
+    .ti-label { font-weight: 600; color: #555; }
+    .ti-value { color: #1a1a2e; }
+    .actor-tag, .vector-tag {
+      display: inline-block; font-size: .7rem; padding: 2px 7px;
+      border-radius: 10px; margin: 2px 2px 0 0;
+    }
+    .actor-tag  { background: #fce4ec; color: #880e4f; }
+    .vector-tag { background: #e8f5e9; color: #1b5e20; }
+
+    /* ── Questionnaire Card ───────────────────────────────────── */
+    #questionnaire-card { display: none; }
+    .q-intro {
+      font-size: .83rem; color: #555; line-height: 1.6; margin-bottom: 1rem;
+      background: #fff8e1; border-left: 3px solid #ffc107;
+      padding: .75rem 1rem; border-radius: 0 6px 6px 0;
+    }
+    .q-category {
+      margin-bottom: .9rem; border: 1px solid #dde3ef; border-radius: 8px; overflow: hidden;
+    }
+    .q-cat-header {
+      background: #1F3864; color: white; padding: .55rem 1rem;
+      font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    }
+    .q-control-row {
+      display: flex; align-items: center; padding: .5rem .9rem;
+      border-bottom: 1px solid #eef0f5; gap: .5rem;
+    }
+    .q-control-row:last-child { border-bottom: none; }
+    .q-control-row:nth-child(even) { background: #f7f9fc; }
+    .q-ctrl-name {
+      font-size: .78rem; color: #333; flex: 1;
+      display: flex; align-items: center; gap: .4rem;
+    }
+    .q-weight {
+      font-size: .67rem; color: #888; background: #e8edf5;
+      padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+    }
+    .q-options { display: flex; gap: .4rem; flex-shrink: 0; }
+    .q-opt { display: flex; align-items: center; gap: .2rem; cursor: pointer; }
+    .q-opt input[type=radio] { width: auto; margin: 0; cursor: pointer; accent-color: #2F5496; }
+    .q-opt-label {
+      font-size: .7rem; font-weight: 600; padding: 2px 7px;
+      border-radius: 10px; cursor: pointer;
+    }
+    .q-not-impl { background: #f8d7da; color: #721c24; }
+    .q-partial  { background: #fff3cd; color: #856404; }
+    .q-full     { background: #d4edda; color: #155724; }
+
+    /* ── Inherent Risk Preview (shown mid-assessment) ─────────── */
+    #inherent-preview-card { display: none; }
+
+    /* ── Mitigation Recommendations ──────────────────────────── */
+    .mitigation-required-banner {
+      background: #f8d7da; border-left: 4px solid #dc3545;
+      border-radius: 0 7px 7px 0; padding: .7rem 1rem;
+      font-size: .83rem; font-weight: 600; color: #721c24; margin-bottom: .75rem;
+    }
+    .mitigation-item {
+      display: grid; grid-template-columns: 28px 1fr auto;
+      gap: .4rem .65rem; align-items: center;
+      padding: .55rem .85rem; border: 1px solid #dde3ef;
+      border-radius: 7px; margin-bottom: .4rem; font-size: .8rem;
+    }
+    .mitigation-item:nth-child(even) { background: #f7f9fc; }
+    .mitigation-rank {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #2F5496; color: white;
+      font-size: .7rem; font-weight: 700;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .mitigation-name { font-weight: 600; color: #1a1a2e; font-size: .8rem; }
+    .mitigation-cat  { font-size: .7rem; color: #888; }
+    .mitigation-status {
+      font-size: .7rem; font-weight: 600; padding: 2px 8px;
+      border-radius: 10px; white-space: nowrap;
+    }
+    .mit-not-impl { background: #f8d7da; color: #721c24; }
+    .mit-partial  { background: #fff3cd; color: #856404; }
+
+    /* ── Drop Zone ────────────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed #b0bdd4;
+      border-radius: 10px;
+      padding: 1.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all .2s;
+      background: #f7f9fc;
+      position: relative;
+    }
+    .drop-zone.dragover {
+      border-color: #2F5496;
+      background: #edf2fb;
+    }
+    .drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-zone svg { color: #2F5496; margin-bottom: .5rem; }
+    .drop-zone p { font-size: .82rem; color: #666; }
+    .drop-zone strong { color: #2F5496; }
+    .drop-zone .formats { font-size: .72rem; color: #aaa; margin-top: .25rem; }
+
+    .file-list { margin-top: .75rem; display: flex; flex-direction: column; gap: .35rem; }
+    .file-item {
+      display: flex; align-items: center; gap: .5rem;
+      background: #f0f4fb; border-radius: 6px; padding: .4rem .65rem;
+      font-size: .78rem; color: #333;
+    }
+    .file-item svg { color: #2F5496; flex-shrink: 0; }
+    .file-item .file-size { margin-left: auto; color: #999; font-size: .72rem; }
+    .file-item .remove-file {
+      margin-left: .5rem; cursor: pointer; color: #cc3333;
+      background: none; border: none; font-size: 1rem; line-height: 1;
+      padding: 0; flex-shrink: 0;
+    }
+
+    /* ── Button ───────────────────────────────────────────────── */
+    .btn-run {
+      width: 100%;
+      margin-top: 1.2rem;
+      padding: .8rem;
+      background: linear-gradient(135deg, #1F3864, #2F5496);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: .95rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .5rem;
+      transition: opacity .2s, transform .1s;
+      letter-spacing: .3px;
+    }
+    .btn-run:hover:not(:disabled) { opacity: .9; }
+    .btn-run:active:not(:disabled) { transform: scale(.99); }
+    .btn-run:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Results Panel ────────────────────────────────────────── */
+    #results-panel { display: flex; flex-direction: column; gap: 1.25rem; }
+
+    /* ── Progress Log ─────────────────────────────────────────── */
+    #progress-card { display: none; }
+    .progress-log {
+      background: #0d1117;
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: .78rem;
+      color: #58a6ff;
+      max-height: 220px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+    .progress-log .log-line { margin-bottom: .1rem; }
+    .progress-log .log-line::before { content: "▸ "; color: #3fb950; }
+    .progress-log .log-error::before { content: "✕ "; color: #f85149; }
+    .log-error { color: #f85149; }
+
+    /* ── Spinner ──────────────────────────────────────────────── */
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Risk Score Cards ─────────────────────────────────────── */
+    #risk-scores { display: none; }
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .score-card {
+      border-radius: 10px;
+      padding: 1.1rem 1rem;
+      text-align: center;
+    }
+    .score-card.inherent { background: #fff3cd; border: 1.5px solid #ffc107; }
+    .score-card.residual-low { background: #d4edda; border: 1.5px solid #28a745; }
+    .score-card.residual-med { background: #fff3cd; border: 1.5px solid #ffc107; }
+    .score-card.residual-high { background: #f8d7da; border: 1.5px solid #dc3545; }
+    .score-card.reduction { background: #e8f4fd; border: 1.5px solid #2F5496; }
+    .score-card .label {
+      font-size: .72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .6px; color: #555; margin-bottom: .4rem;
+    }
+    .score-card .amount {
+      font-size: 1.35rem; font-weight: 700; color: #1a1a2e; line-height: 1.1;
+    }
+    .score-card .sub { font-size: .72rem; color: #777; margin-top: .25rem; }
+
+    .risk-rating-badge {
+      display: inline-block; margin: .35rem 0 .1rem;
+      padding: 2px 10px; border-radius: 12px;
+      font-size: .72rem; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+    }
+    .badge-low      { background: #d4edda; color: #155724; border: 1px solid #28a745; }
+    .badge-moderate { background: #fff3cd; color: #856404; border: 1px solid #ffc107; }
+    .badge-high     { background: #f8d7da; color: #721c24; border: 1px solid #dc3545; }
+
+    .risk-scale-section {
+      margin: .75rem 0 1.1rem;
+      background: #f7f9fc; border: 1px solid #dde3ef;
+      border-radius: 8px; padding: .75rem 1rem;
+    }
+    .risk-scale-title {
+      font-size: .75rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .5px; color: #2F5496; margin-bottom: .5rem;
+    }
+    .risk-scale-title span { font-weight: 400; text-transform: none; color: #888; letter-spacing: 0; }
+    .risk-scale-legend { display: flex; flex-direction: column; gap: .35rem; }
+    .scale-row { display: flex; align-items: center; gap: .65rem; }
+    .scale-def { font-size: .78rem; color: #555; }
+
+    /* ── Control Effectiveness ────────────────────────────────── */
+    .effectiveness-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    .effectiveness-table th {
+      background: #1F3864; color: white; padding: .5rem .75rem;
+      text-align: left; font-weight: 600; font-size: .75rem;
+    }
+    .effectiveness-table td { padding: .5rem .75rem; border-bottom: 1px solid #eef0f5; }
+    .effectiveness-table tr:last-child td { border-bottom: none; }
+    .effectiveness-table tr:nth-child(even) td { background: #f7f9fc; }
+
+    .rating-pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: .72rem;
+      font-weight: 600;
+    }
+    .pill-effective   { background: #d4edda; color: #155724; }
+    .pill-partial     { background: #fff3cd; color: #856404; }
+    .pill-ineffective { background: #f8d7da; color: #721c24; }
+
+    .score-bar-wrap { display: flex; align-items: center; gap: .5rem; }
+    .score-bar {
+      flex: 1; height: 6px; background: #e9ecef; border-radius: 4px; overflow: hidden;
+    }
+    .score-bar-fill { height: 100%; border-radius: 4px; transition: width .6s ease; }
+    .fill-green { background: #28a745; }
+    .fill-yellow { background: #ffc107; }
+    .fill-red { background: #dc3545; }
+    .score-val { font-size: .75rem; font-weight: 700; color: #444; min-width: 30px; }
+
+    /* ── Gaps ─────────────────────────────────────────────────── */
+    .gaps-list { list-style: none; display: flex; flex-direction: column; gap: .4rem; }
+    .gaps-list li {
+      font-size: .82rem; padding: .45rem .75rem;
+      background: #fff8e1; border-left: 3px solid #ffc107;
+      border-radius: 0 6px 6px 0; color: #555;
+    }
+
+    /* ── Downloads ────────────────────────────────────────────── */
+    .download-row { display: flex; gap: .75rem; }
+    .btn-download {
+      flex: 1; padding: .65rem; border-radius: 8px; border: 1.5px solid;
+      font-size: .83rem; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: .4rem;
+      text-decoration: none; transition: opacity .15s;
+    }
+    .btn-download:hover { opacity: .85; }
+    .btn-xlsx { background: #e8f5e9; border-color: #28a745; color: #155724; }
+    .btn-pdf  { background: #fce4ec; border-color: #dc3545; color: #721c24; }
+
+    /* ── Summary text ─────────────────────────────────────────── */
+    .summary-text {
+      font-size: .83rem; color: #444; line-height: 1.65;
+      background: #f7f9fc; padding: .85rem 1rem; border-radius: 8px;
+      border-left: 3px solid #2F5496;
+    }
+
+    /* ── Empty state ──────────────────────────────────────────── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; padding: 4rem 2rem; color: #aaa; text-align: center;
+    }
+    .empty-state svg { margin-bottom: 1rem; opacity: .35; }
+    .empty-state p { font-size: .9rem; }
+
+    /* ── Responsive ───────────────────────────────────────────── */
+    @media (max-width: 860px) {
+      .container { grid-template-columns: 1fr; }
+      .score-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    </svg>
+    <h1>Vendor Risk Assessment Platform</h1>
+  </div>
+  <span class="badge">FAIR MODEL · AI-POWERED</span>
+</header>
+
+<div class="container">
+
+  <!-- ── LEFT: Input Form ─────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      Vendor Information
+    </div>
+    <div class="card-body">
+      <form id="assess-form">
+
+        <div class="section-label">Vendor Details</div>
+
+        <div class="form-group">
+          <label>Vendor Name <span>*</span></label>
+          <input type="text" name="vendor_name" placeholder="e.g. Acme Corp" required />
+        </div>
+        <div class="form-group">
+          <label>Website <span>optional</span></label>
+          <input type="url" name="vendor_website" placeholder="https://vendor.com" />
+        </div>
+        <div class="form-group">
+          <label>Product / Service Description <span>optional</span></label>
+          <textarea name="vendor_description" placeholder="Brief description of the product or service being assessed..."></textarea>
+        </div>
+
+        <div class="section-label">Risk Assessment Configuration</div>
+
+        <div class="form-group">
+          <label>Industry / Sector <span>*</span></label>
+          <select id="industry-select" name="industry" required>
+            <option value="" disabled selected>Select vendor's industry sector…</option>
+          </select>
+          <div class="fair-hint">Threat intelligence (DBIR, CISA, FBI IC3, MITRE ATT&CK) is auto-fetched when assessment starts</div>
+        </div>
+
+        <div class="form-group">
+          <label>Product / Service Revenue <span>USD — used as loss magnitude</span></label>
+          <input type="number" name="product_revenue" value="1000000" min="0" step="10000" required />
+          <div class="fair-hint">Annual revenue generated by or dependent on this vendor — represents the maximum financial exposure per loss event</div>
+        </div>
+
+        <div class="form-group">
+          <label>Company Annual Revenue <span>USD — optional</span></label>
+          <input type="number" name="company_revenue" value="" min="0" step="100000" />
+          <div class="fair-hint">Total company revenue — used to show materiality of this risk relative to the whole business</div>
+        </div>
+
+        <div class="section-label">Security Documentation <span style="font-weight:400;color:#888;font-size:.7rem;text-transform:none;letter-spacing:0"> — optional</span></div>
+
+        <div class="drop-zone" id="drop-zone">
+          <input type="file" id="file-input" name="documents" multiple
+                 accept=".pdf,.txt,.md,.docx" />
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p><strong>Drop files here</strong> or click to browse</p>
+          <div class="formats">PDF · DOCX · TXT · MD &nbsp;·&nbsp; If no documents are uploaded, a control questionnaire will be provided</div>
+        </div>
+        <div class="file-list" id="file-list"></div>
+
+        <button type="submit" class="btn-run" id="run-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2.5">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Run Assessment
+        </button>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: Results Panel ────────────────────────────────── -->
+  <div id="results-panel">
+
+    <!-- Progress log -->
+    <div class="card" id="progress-card">
+      <div class="card-header">
+        <div class="spinner" id="progress-spinner"></div>
+        <span id="progress-title">Running Assessment...</span>
+      </div>
+      <div class="card-body">
+        <div class="progress-log" id="progress-log"></div>
+      </div>
+    </div>
+
+    <!-- Inherent risk preview (shown mid-assessment after threat intel fetched) -->
+    <div class="card" id="inherent-preview-card">
+      <div class="card-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        Inherent Risk &amp; Threat Intelligence
+      </div>
+      <div class="card-body" id="inherent-preview-body"></div>
+    </div>
+
+    <!-- Questionnaire card (shown when no docs uploaded) -->
+    <div class="card" id="questionnaire-card">
+      <div class="card-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+        Security Control Questionnaire
+      </div>
+      <div class="card-body">
+        <p class="q-intro">No vendor documentation was uploaded. Rate each control below based on the vendor's current implementation status. All controls default to <strong>Not Implemented</strong>.</p>
+        <div id="questionnaire-form"></div>
+        <button id="questionnaire-submit-btn" class="btn-run" style="margin-top:1rem;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          Submit &amp; Run Assessment
+        </button>
+      </div>
+    </div>
+
+    <!-- Risk scores -->
+    <div class="card" id="risk-scores">
+      <div class="card-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        FAIR Risk Scores
+      </div>
+      <div class="card-body">
+        <div class="threat-intel-card" id="threat-intel-panel" style="display:none"></div>
+
+        <div class="score-grid" id="score-grid"></div>
+
+        <div class="risk-scale-section">
+          <div class="risk-scale-title">Risk Rating Scale <span>(Annualised Risk Exposure as % of Product/Service Revenue)</span></div>
+          <div id="risk-scale-legend" class="risk-scale-legend"></div>
+        </div>
+
+        <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#2F5496;margin-bottom:.6rem;">
+          Control Effectiveness by Category
+        </div>
+        <table class="effectiveness-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Score</th>
+              <th>Rating</th>
+            </tr>
+          </thead>
+          <tbody id="effectiveness-body"></tbody>
+        </table>
+
+        <div style="margin-top:1.1rem;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#2F5496;margin-bottom:.5rem;">
+          Summary
+        </div>
+        <div class="summary-text" id="summary-text"></div>
+
+        <div style="margin-top:1rem;" id="gaps-section">
+          <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#2F5496;margin-bottom:.5rem;">
+            Identified Gaps
+          </div>
+          <ul class="gaps-list" id="gaps-list"></ul>
+        </div>
+
+        <div id="mitigation-section" style="margin-top:1.25rem;display:none">
+          <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#2F5496;margin-bottom:.6rem;">
+            Mitigation Recommendations
+          </div>
+          <div id="mitigation-list"></div>
+        </div>
+
+        <div style="margin-top:1.25rem;">
+          <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#2F5496;margin-bottom:.6rem;">
+            Download Reports
+          </div>
+          <div class="download-row">
+            <a id="dl-xlsx" class="btn-download btn-xlsx" href="#">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              Control Review (.xlsx)
+            </a>
+            <a id="dl-pdf" class="btn-download btn-pdf" href="#">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              Risk Report (.pdf)
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div class="card" id="empty-state">
+      <div class="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <p>Fill in vendor details and select an industry sector,<br/>then click <strong>Run Assessment</strong> to begin.<br/><span style="font-size:.8rem;color:#bbb;">Upload documents for AI review, or complete a questionnaire if no docs are available.</span></p>
+      </div>
+    </div>
+
+  </div><!-- /results-panel -->
+</div><!-- /container -->
+
+<script>
+  // ── Industry dropdown ────────────────────────────────────────────
+  const industrySelect = document.getElementById("industry-select");
+
+  fetch("/industry-sectors")
+    .then(r => r.json())
+    .then(data => {
+      data.sectors.forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s; opt.textContent = s;
+        industrySelect.appendChild(opt);
+      });
+    });
+
+  // ── File handling ────────────────────────────────────────────────
+  const dropZone   = document.getElementById("drop-zone");
+  const fileInput  = document.getElementById("file-input");
+  const fileList   = document.getElementById("file-list");
+  let selectedFiles = [];
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function renderFileList() {
+    fileList.innerHTML = "";
+    selectedFiles.forEach((file, idx) => {
+      const item = document.createElement("div");
+      item.className = "file-item";
+      item.innerHTML = `
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <span>${file.name}</span>
+        <span class="file-size">${formatBytes(file.size)}</span>
+        <button class="remove-file" data-idx="${idx}" title="Remove">×</button>
+      `;
+      fileList.appendChild(item);
+    });
+    fileList.querySelectorAll(".remove-file").forEach(btn => {
+      btn.addEventListener("click", e => {
+        const i = parseInt(e.target.dataset.idx);
+        selectedFiles.splice(i, 1);
+        renderFileList();
+      });
+    });
+  }
+
+  function addFiles(newFiles) {
+    for (const f of newFiles) {
+      if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+        selectedFiles.push(f);
+      }
+    }
+    renderFileList();
+  }
+
+  fileInput.addEventListener("change", () => addFiles(Array.from(fileInput.files)));
+  dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    addFiles(Array.from(e.dataTransfer.files));
+  });
+
+  // ── Form submit ──────────────────────────────────────────────────
+  const form    = document.getElementById("assess-form");
+  const runBtn  = document.getElementById("run-btn");
+  let currentJobId    = null;
+  let currentToken    = null;
+
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+
+    // Reset UI
+    document.getElementById("empty-state").style.display          = "none";
+    document.getElementById("risk-scores").style.display          = "none";
+    document.getElementById("questionnaire-card").style.display   = "none";
+    document.getElementById("inherent-preview-card").style.display = "none";
+    document.getElementById("progress-card").style.display        = "block";
+    document.getElementById("progress-log").innerHTML             = "";
+    document.getElementById("progress-spinner").style.display     = "block";
+    document.getElementById("progress-title").textContent         = "Running Assessment...";
+    runBtn.disabled   = true;
+    runBtn.innerHTML  = `<div class="spinner"></div> Running...`;
+
+    const fd = new FormData(form);
+    fd.delete("documents");
+    selectedFiles.forEach(f => fd.append("documents", f));
+
+    try {
+      const res  = await fetch("/assess", { method: "POST", body: fd });
+      const data = await res.json();
+
+      if (!res.ok) { showError(data.error || "Unknown error"); return; }
+
+      currentJobId = data.job_id;
+      currentToken = data.access_token;
+      listenToProgress(currentJobId, currentToken);
+    } catch (err) {
+      showError(err.message);
+    }
+  });
+
+  // ── SSE Progress ─────────────────────────────────────────────────
+  function listenToProgress(jobId, token) {
+    const es = new EventSource(`/progress/${jobId}?token=${encodeURIComponent(token)}`);
+    const log = document.getElementById("progress-log");
+
+    es.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "heartbeat") return;
+
+      // Log progress messages
+      if (msg.message && msg.type !== "questionnaire") {
+        const line = document.createElement("div");
+        line.className = "log-line" + (msg.type === "error" ? " log-error" : "");
+        line.textContent = msg.message;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+      }
+
+      // Inherent risk ready — show preview card while assessment continues
+      if (msg.type === "inherent_risk") {
+        renderInherentPreview(msg.inherent_risk, msg.inherent_rating, msg.threat_intel);
+      }
+
+      // No docs — pause SSE and show questionnaire
+      if (msg.type === "questionnaire") {
+        es.close();
+        document.getElementById("progress-spinner").style.display = "none";
+        document.getElementById("progress-title").textContent = "Questionnaire Required";
+        buildQuestionnaire(msg.categories);
+        document.getElementById("questionnaire-card").style.display = "block";
+      }
+
+      if (msg.type === "complete") {
+        es.close();
+        document.getElementById("inherent-preview-card").style.display = "none";
+        document.getElementById("progress-spinner").style.display = "none";
+        document.getElementById("progress-title").textContent = "Assessment Complete ✓";
+        runBtn.disabled  = false;
+        runBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Assessment`;
+        renderResults(msg.result, jobId);
+      }
+
+      if (msg.type === "error") {
+        es.close();
+        showError(msg.message);
+      }
+    };
+
+    es.onerror = () => { es.close(); showError("Connection to server lost."); };
+  }
+
+  // ── Inherent Risk Preview ─────────────────────────────────────────
+  function renderInherentPreview(ir, rating, intel) {
+    rating = rating || {};
+    intel  = intel  || {};
+    const areStr = rating.are_pct != null
+      ? `${rating.are_pct}% of product revenue` : "";
+    let actorsHtml = "";
+    if (intel.primary_threat_actors?.length) {
+      actorsHtml = intel.primary_threat_actors.map(a =>
+        `<span class="actor-tag">${a}</span>`).join(" ");
+    }
+    let vectorsHtml = "";
+    if (intel.top_attack_vectors?.length) {
+      vectorsHtml = intel.top_attack_vectors.slice(0, 3).map(v =>
+        `<span class="vector-tag">${v}</span>`).join(" ");
+    }
+
+    document.getElementById("inherent-preview-body").innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem;">
+        <div class="score-card inherent">
+          <div class="label">Inherent Risk</div>
+          <div class="amount">${fmt(ir)}</div>
+          <div class="risk-rating-badge badge-${(rating.rating||'low').toLowerCase()}">${rating.rating||''}</div>
+          <div class="sub">${areStr} · no controls applied</div>
+        </div>
+        <div class="score-card" style="background:#edf2fb;border:1.5px solid #2F5496;text-align:left;">
+          <div class="label">${intel.industry || 'Threat Intelligence'}</div>
+          <div style="font-size:.75rem;color:#444;margin-top:.3rem;line-height:1.5;">
+            <span style="font-weight:600;color:#2F5496;">CF:</span> ${intel.contact_frequency ?? ''} /yr &nbsp;
+            <span style="font-weight:600;color:#2F5496;">PoA:</span> ${intel.probability_of_action != null ? (intel.probability_of_action*100).toFixed(0)+'%' : ''}<br/>
+            <span style="font-weight:600;color:#2F5496;">Capability:</span> ${intel.threat_capability != null ? (intel.threat_capability*100).toFixed(0)+'%' : ''}
+          </div>
+          <div style="margin-top:.4rem;">${actorsHtml}</div>
+        </div>
+      </div>
+      ${vectorsHtml ? `<div style="font-size:.72rem;color:#555;"><span style="font-weight:600;color:#2F5496;">Top Attack Vectors:</span> ${vectorsHtml}</div>` : ''}
+    `;
+    document.getElementById("inherent-preview-card").style.display = "block";
+  }
+
+  // ── Questionnaire builder ──────────────────────────────────────────
+  function buildQuestionnaire(categories) {
+    const container = document.getElementById("questionnaire-form");
+    container.innerHTML = "";
+    for (const [catKey, cat] of Object.entries(categories)) {
+      const section = document.createElement("div");
+      section.className = "q-category";
+      let html = `<div class="q-cat-header">${cat.label}</div>`;
+      for (const ctrl of cat.controls) {
+        const wPct = Math.round(ctrl.weight * 100);
+        html += `
+          <div class="q-control-row">
+            <div class="q-ctrl-name">${ctrl.name}<span class="q-weight">${wPct}%</span></div>
+            <div class="q-options">
+              <label class="q-opt">
+                <input type="radio" name="${catKey}::${ctrl.key}" value="0" checked />
+                <span class="q-opt-label q-not-impl">Not Implemented</span>
+              </label>
+              <label class="q-opt">
+                <input type="radio" name="${catKey}::${ctrl.key}" value="0.5" />
+                <span class="q-opt-label q-partial">Partial</span>
+              </label>
+              <label class="q-opt">
+                <input type="radio" name="${catKey}::${ctrl.key}" value="1" />
+                <span class="q-opt-label q-full">Full</span>
+              </label>
+            </div>
+          </div>`;
+      }
+      section.innerHTML = html;
+      container.appendChild(section);
+    }
+  }
+
+  // ── Questionnaire submit ───────────────────────────────────────────
+  document.getElementById("questionnaire-submit-btn").addEventListener("click", async () => {
+    // Collect all checked radio answers
+    const answers = {};
+    document.querySelectorAll("#questionnaire-form input[type=radio]:checked").forEach(input => {
+      const [catKey, controlKey] = input.name.split("::");
+      if (!answers[catKey]) answers[catKey] = {};
+      answers[catKey][controlKey] = parseFloat(input.value);
+    });
+
+    const btn = document.getElementById("questionnaire-submit-btn");
+    btn.disabled  = true;
+    btn.innerHTML = `<div class="spinner"></div> Submitting...`;
+
+    try {
+      const t   = encodeURIComponent(currentToken);
+      const res = await fetch(`/questionnaire/${currentJobId}?token=${t}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(answers),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || "Failed to submit questionnaire."); return; }
+
+      // Resume: hide questionnaire, show progress, reconnect SSE
+      document.getElementById("questionnaire-card").style.display   = "none";
+      document.getElementById("progress-card").style.display        = "block";
+      document.getElementById("progress-spinner").style.display     = "block";
+      document.getElementById("progress-title").textContent         = "Running Assessment...";
+      listenToProgress(currentJobId, currentToken);
+
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      btn.disabled  = false;
+      btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Submit &amp; Run Assessment`;
+    }
+  });
+
+  // ── Render Results ───────────────────────────────────────────────
+  const CATEGORY_NAMES = {
+    access:       "Access Risk Controls",
+    data_security:"Data Security Risk Controls",
+    integration:  "Integration Risk Controls",
+    ai:           "AI Risk Controls",
+    availability: "Availability Risk Controls",
+    governance:   "Governance Risk Controls",
+  };
+
+  function fmt(n) {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  }
+
+  function residualClass(pct) {
+    if (pct <= 30) return "residual-low";
+    if (pct <= 60) return "residual-med";
+    return "residual-high";
+  }
+
+  function ratingPill(rating) {
+    const cls = rating === "Effective" ? "pill-effective"
+              : rating === "Partially Effective" ? "pill-partial"
+              : "pill-ineffective";
+    return `<span class="rating-pill ${cls}">${rating}</span>`;
+  }
+
+  function barClass(score) {
+    if (score >= 0.8) return "fill-green";
+    if (score >= 0.5) return "fill-yellow";
+    return "fill-red";
+  }
+
+  function renderResults(result, jobId) {
+    document.getElementById("risk-scores").style.display = "block";
+
+    // Threat intelligence panel
+    const ti = result.threat_intel || {};
+    if (ti.industry) {
+      let tiHtml = `<div class="threat-intel-title">Threat Intelligence — ${ti.industry}</div>
+        <div class="threat-intel-grid">
+          <span class="ti-label">Contact Frequency</span><span class="ti-value">${ti.contact_frequency} events/yr</span>
+          <span class="ti-label">Probability of Action</span><span class="ti-value">${(ti.probability_of_action * 100).toFixed(0)}%</span>
+          <span class="ti-label">Threat Capability</span><span class="ti-value">${(ti.threat_capability * 100).toFixed(0)}%</span>
+          <span class="ti-label">Baseline Resistance</span><span class="ti-value">${(ti.resistance_strength * 100).toFixed(0)}%</span>
+        </div>`;
+      if (ti.primary_threat_actors?.length) {
+        tiHtml += `<div style="margin-top:.5rem;font-size:.75rem;">
+          <span style="font-weight:600;color:#2F5496;">Threat Actors:</span> `;
+        ti.primary_threat_actors.forEach(a => { tiHtml += `<span class="actor-tag">${a}</span>`; });
+        tiHtml += `</div>`;
+      }
+      if (ti.top_attack_vectors?.length) {
+        tiHtml += `<div style="margin-top:.3rem;font-size:.75rem;">
+          <span style="font-weight:600;color:#2F5496;">Attack Vectors:</span> `;
+        ti.top_attack_vectors.forEach(v => { tiHtml += `<span class="vector-tag">${v}</span>`; });
+        tiHtml += `</div>`;
+      }
+      if (ti.sources_referenced?.length) {
+        tiHtml += `<div style="margin-top:.35rem;font-size:.7rem;color:#888;">Sources: ${ti.sources_referenced.join(' · ')}</div>`;
+      }
+      document.getElementById("threat-intel-panel").innerHTML = tiHtml;
+      document.getElementById("threat-intel-panel").style.display = "block";
+    }
+
+    // Score cards
+    const pct    = result.reduction_pct;
+    const rClass = residualClass(pct);
+    const ir     = result.inherent_rating || {};
+    const rr     = result.residual_rating  || {};
+
+    const areLabel = (rating) => {
+      let s = `${rating.are_pct ?? 0}% of product revenue/yr`;
+      if (rating.are_pct_company != null) s += ` · ${rating.are_pct_company}% of company revenue`;
+      return s;
+    };
+
+    document.getElementById("score-grid").innerHTML = `
+      <div class="score-card inherent">
+        <div class="label">Inherent Risk</div>
+        <div class="amount">${fmt(result.inherent_risk)}</div>
+        <div class="risk-rating-badge badge-${(ir.rating||'').toLowerCase()}">${ir.rating || ''}</div>
+        <div class="sub">${areLabel(ir)} · no controls</div>
+      </div>
+      <div class="score-card ${rClass}">
+        <div class="label">Residual Risk</div>
+        <div class="amount">${fmt(result.residual_risk)}</div>
+        <div class="risk-rating-badge badge-${(rr.rating||'').toLowerCase()}">${rr.rating || ''}</div>
+        <div class="sub">${areLabel(rr)} · with controls</div>
+      </div>
+      <div class="score-card reduction">
+        <div class="label">Risk Reduction</div>
+        <div class="amount">${fmt(result.risk_reduction)}</div>
+        <div class="sub">${pct}% reduction in exposure</div>
+      </div>
+    `;
+
+    // Risk scale legend
+    const scale = ir.scale || rr.scale || {};
+    const scaleEntries = [
+      { label: "Low",      cls: "badge-low",      def: scale["Low"]      || "ARE < 20% — less than 1 full loss event every 5 years" },
+      { label: "Moderate", cls: "badge-moderate",  def: scale["Moderate"] || "ARE 20–50% — 1 full loss event every 2–5 years" },
+      { label: "High",     cls: "badge-high",      def: scale["High"]     || "ARE ≥ 50% — 1 full loss event every 1–2 years or more" },
+    ];
+    document.getElementById("risk-scale-legend").innerHTML = scaleEntries.map(e =>
+      `<div class="scale-row">
+        <span class="risk-rating-badge ${e.cls}">${e.label}</span>
+        <span class="scale-def">${e.def}</span>
+      </div>`
+    ).join("");
+
+    // Effectiveness table
+    const tbody = document.getElementById("effectiveness-body");
+    tbody.innerHTML = "";
+    for (const [key, val] of Object.entries(result.control_effectiveness)) {
+      const score = val.score;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${CATEGORY_NAMES[key] || key}</td>
+        <td>
+          <div class="score-bar-wrap">
+            <div class="score-bar">
+              <div class="score-bar-fill ${barClass(score)}" style="width:${score * 100}%"></div>
+            </div>
+            <span class="score-val">${score.toFixed(2)}</span>
+          </div>
+        </td>
+        <td>${ratingPill(val.rating)}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    // Summary
+    document.getElementById("summary-text").textContent =
+      result.overall_summary || "Assessment complete. See reports for full details.";
+
+    // Gaps
+    const gapsList = document.getElementById("gaps-list");
+    gapsList.innerHTML = "";
+    if (result.gaps && result.gaps.length) {
+      result.gaps.forEach(g => {
+        const li = document.createElement("li");
+        li.textContent = g;
+        gapsList.appendChild(li);
+      });
+      document.getElementById("gaps-section").style.display = "block";
+    } else {
+      document.getElementById("gaps-section").style.display = "none";
+    }
+
+    // Mitigation recommendations
+    const recs = result.mitigation_recommendations || [];
+    if (recs.length) {
+      let mitigHtml = "";
+      if (result.mitigation_required) {
+        mitigHtml += `<div class="mitigation-required-banner">
+          ⚠ Mitigation Required — Residual risk is ${result.residual_rating?.rating || 'elevated'}.
+          Implement the highest-priority controls below to reduce exposure.
+        </div>`;
+      }
+      recs.forEach((rec, i) => {
+        const statusCls = rec.current_status === "Not Implemented" ? "mit-not-impl" : "mit-partial";
+        mitigHtml += `
+          <div class="mitigation-item">
+            <div class="mitigation-rank">${i + 1}</div>
+            <div>
+              <div class="mitigation-name">${rec.control_name}</div>
+              <div class="mitigation-cat">${rec.category_label} · Weight: ${Math.round(rec.weight * 100)}%</div>
+            </div>
+            <span class="mitigation-status ${statusCls}">${rec.current_status}</span>
+          </div>`;
+      });
+      document.getElementById("mitigation-list").innerHTML = mitigHtml;
+      document.getElementById("mitigation-section").style.display = "block";
+    } else {
+      document.getElementById("mitigation-section").style.display = "none";
+    }
+
+    // Download links
+    const t = encodeURIComponent(currentToken);
+    document.getElementById("dl-xlsx").href = `/download/${jobId}/xlsx?token=${t}`;
+    document.getElementById("dl-pdf").href  = `/download/${jobId}/pdf?token=${t}`;
+  }
+
+  function showError(msg) {
+    document.getElementById("progress-spinner").style.display = "none";
+    document.getElementById("progress-title").textContent = "Assessment Failed";
+    const log = document.getElementById("progress-log");
+    const line = document.createElement("div");
+    line.className = "log-line log-error";
+    line.textContent = msg;
+    log.appendChild(line);
+    runBtn.disabled = false;
+    runBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Assessment`;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+# ── Credentials & secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+secrets.json
+secrets.yaml
+secrets.toml
+config/local*.py
+config/prod*.py
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# ── Assessment uploads & generated reports ───────────────────────────────────
+# Vendor documents uploaded for assessment (may contain confidential data)
+uploads/
+# Generated XLSX/PDF reports (contain vendor assessment results)
+outputs/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS & editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
