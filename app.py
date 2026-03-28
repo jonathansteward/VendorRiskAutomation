@@ -16,6 +16,9 @@ Security hardened per OWASP Top 10:
 import json
 import logging
 import os
+
+from dotenv import load_dotenv
+load_dotenv()
 import queue
 import re
 import secrets
