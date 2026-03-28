@@ -25,7 +25,7 @@ import secrets
 import shutil
 import threading
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from flask import (
     Flask,
@@ -61,7 +61,16 @@ audit_log = logging.getLogger("audit")
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB hard limit (A06)
-app.config["SECRET_KEY"] = secrets.token_hex(32)
+_secret_key = os.environ.get("FLASK_SECRET_KEY")
+if not _secret_key:
+    import warnings
+    warnings.warn(
+        "FLASK_SECRET_KEY not set — using an ephemeral key. "
+        "Set this environment variable for production deployments.",
+        stacklevel=2,
+    )
+    _secret_key = secrets.token_hex(32)
+app.config["SECRET_KEY"] = _secret_key
 
 # Rate limiting — prevent abuse / DoS (A07, A05)
 limiter = Limiter(
@@ -107,6 +116,25 @@ def _allowed_file(filename: str) -> bool:
     return ext in ALLOWED_EXTENSIONS
 
 
+# Output reports are deleted after this retention window (A02)
+OUTPUT_RETENTION_HOURS = int(os.environ.get("OUTPUT_RETENTION_HOURS", "24"))
+
+
+def _cleanup_old_outputs():
+    """Delete report files in OUTPUT_DIR older than OUTPUT_RETENTION_HOURS."""
+    cutoff = datetime.utcnow() - timedelta(hours=OUTPUT_RETENTION_HOURS)
+    try:
+        for fname in os.listdir(OUTPUT_DIR):
+            fpath = os.path.join(OUTPUT_DIR, fname)
+            if os.path.isfile(fpath):
+                mtime = datetime.utcfromtimestamp(os.path.getmtime(fpath))
+                if mtime < cutoff:
+                    os.remove(fpath)
+                    audit_log.info("OUTPUT_CLEANUP deleted=%s", fname)
+    except Exception:
+        audit_log.exception("OUTPUT_CLEANUP_ERROR")
+
+
 # ---------------------------------------------------------------------------
 # Security headers (A05)
 # ---------------------------------------------------------------------------
@@ -123,6 +151,7 @@ def set_security_headers(response):
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:;"
     )
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 
@@ -260,12 +289,21 @@ def start_assessment():
     return jsonify({"job_id": job_id, "access_token": access_token})
 
 
-def _check_access(job_id: str) -> tuple[dict | None, Response | None]:
-    """Validate job_id exists and the caller's access token matches (A01)."""
+def _check_access(job_id: str, allow_query_param: bool = False) -> tuple[dict | None, Response | None]:
+    """Validate job_id exists and the caller's access token matches (A01).
+
+    allow_query_param should only be True for SSE endpoints where browsers cannot
+    send custom headers via EventSource.  All other routes require the
+    X-Access-Token header to prevent tokens from leaking into server access logs
+    and browser history.
+    """
     if job_id not in jobs:
         return None, (jsonify({"error": "Not found."}), 404)
 
-    provided = request.args.get("token") or request.headers.get("X-Access-Token", "")
+    provided = request.headers.get("X-Access-Token", "")
+    if allow_query_param and not provided:
+        provided = request.args.get("token", "")
+
     expected = jobs[job_id].get("access_token", "")
 
     # Constant-time comparison prevents timing attacks (A02)
@@ -279,7 +317,8 @@ def _check_access(job_id: str) -> tuple[dict | None, Response | None]:
 @app.route("/progress/<job_id>")
 def progress_stream(job_id: str):
     """Server-Sent Events stream for real-time progress updates."""
-    job, err = _check_access(job_id)
+    # EventSource does not support custom headers, so query param is permitted here only (A01)
+    job, err = _check_access(job_id, allow_query_param=True)
     if err:
         return err
 
@@ -559,6 +598,8 @@ def _run_assessment(
         # Clean up uploaded files after assessment completes (A02)
         if doc_folder:
             shutil.rmtree(doc_folder, ignore_errors=True)
+        # Purge old output reports to limit sensitive data at rest (A02)
+        _cleanup_old_outputs()
 
 
 # ---------------------------------------------------------------------------

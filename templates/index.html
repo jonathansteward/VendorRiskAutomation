@@ -432,7 +432,18 @@
     </svg>
     <h1>Vendor Risk Assessment Platform</h1>
   </div>
-  <span class="badge">FAIR MODEL · AI-POWERED</span>
+  <div style="display:flex;align-items:center;gap:.75rem;">
+    <span class="badge">FAIR MODEL · AI-POWERED</span>
+    <button id="new-assessment-btn" onclick="resetAssessment()"
+            style="display:none;font-size:.72rem;font-weight:700;letter-spacing:.5px;
+                   text-transform:uppercase;padding:5px 14px;border-radius:20px;border:none;
+                   cursor:pointer;background:rgba(255,255,255,.18);color:#fff;
+                   border:1px solid rgba(255,255,255,.4);transition:background .15s;"
+            onmouseover="this.style.background='rgba(255,255,255,.28)'"
+            onmouseout="this.style.background='rgba(255,255,255,.18)'">
+      &#43; New Assessment
+    </button>
+  </div>
 </header>
 
 <div class="container">
@@ -484,6 +495,10 @@
         </div>
 
         <div class="section-label">Security Documentation <span style="font-weight:400;color:#888;font-size:.7rem;text-transform:none;letter-spacing:0"> — optional</span></div>
+
+        <div style="font-size:.72rem;color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:.5rem .75rem;margin-bottom:.75rem;">
+          <strong>Data Processing Notice:</strong> Uploaded documents and vendor details are processed by OpenAI GPT-4o. Do not upload documents subject to confidentiality obligations without appropriate authorisation.
+        </div>
 
         <div class="drop-zone" id="drop-zone">
           <input type="file" id="file-input" name="documents" multiple
@@ -719,6 +734,44 @@
   let currentJobId    = null;
   let currentToken    = null;
 
+  function resetAssessment() {
+    // Clear job state
+    currentJobId = null;
+    currentToken = null;
+
+    // Reset form fields and file selection
+    document.getElementById("assess-form").reset();
+    selectedFiles = [];
+    renderFileList();
+
+    // Re-enable run button
+    runBtn.disabled  = false;
+    runBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Assessment`;
+
+    // Hide all result/progress panels, show empty state
+    document.getElementById("progress-card").style.display          = "none";
+    document.getElementById("risk-scores").style.display            = "none";
+    document.getElementById("questionnaire-card").style.display     = "none";
+    document.getElementById("inherent-preview-card").style.display  = "none";
+    document.getElementById("empty-state").style.display            = "block";
+
+    // Clear progress log and result content
+    document.getElementById("progress-log").innerHTML               = "";
+    document.getElementById("score-grid").innerHTML                 = "";
+    document.getElementById("effectiveness-body").innerHTML         = "";
+    document.getElementById("summary-text").innerHTML               = "";
+    document.getElementById("gaps-list").innerHTML                  = "";
+    document.getElementById("threat-intel-panel").innerHTML         = "";
+    document.getElementById("threat-intel-panel").style.display     = "none";
+    document.getElementById("mitigation-section").style.display     = "none";
+
+    // Hide the New Assessment button again
+    document.getElementById("new-assessment-btn").style.display     = "none";
+
+    // Scroll back to top of form
+    document.querySelector(".card").scrollIntoView({ behavior: "smooth" });
+  }
+
   form.addEventListener("submit", async e => {
     e.preventDefault();
 
@@ -731,6 +784,7 @@
     document.getElementById("progress-log").innerHTML             = "";
     document.getElementById("progress-spinner").style.display     = "block";
     document.getElementById("progress-title").textContent         = "Running Assessment...";
+    document.getElementById("new-assessment-btn").style.display   = "inline-block";
     runBtn.disabled   = true;
     runBtn.innerHTML  = `<div class="spinner"></div> Running...`;
 
@@ -892,10 +946,9 @@
     btn.innerHTML = `<div class="spinner"></div> Submitting...`;
 
     try {
-      const t   = encodeURIComponent(currentToken);
-      const res = await fetch(`/questionnaire/${currentJobId}?token=${t}`, {
+      const res = await fetch(`/questionnaire/${currentJobId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Access-Token": currentToken },
         body: JSON.stringify(answers),
       });
       const data = await res.json();

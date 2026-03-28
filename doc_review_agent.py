@@ -308,8 +308,13 @@ def _validate_llm_response(review: dict) -> None:
 
 
 def _sanitize_text(text: str) -> str:
-    """Strip HTML/script tags to prevent stored XSS (A03)."""
-    return re.sub(r"<[^>]+>", "", text).strip()[:2000]
+    """Strip HTML/script tags to prevent stored XSS (A03).
+
+    html.unescape() is applied first so that encoded variants like
+    &lt;script&gt; are normalised before the tag-stripping regex runs.
+    """
+    import html
+    return re.sub(r"<[^>]+>", "", html.unescape(text)).strip()[:2000]
 
 
 def _collect_files(doc_source: str) -> list[str]:
