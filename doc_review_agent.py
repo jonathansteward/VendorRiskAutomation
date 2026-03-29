@@ -24,7 +24,9 @@ from reportlab.platypus import (
 )
 
 from vendor_risk_engine import (
+    ATTESTATION_MULTIPLIERS,
     calculate_control_strength,
+    calculate_loss_magnitude,
     calculate_residual_risk,
     CONTROL_CATEGORIES,
 )
@@ -125,7 +127,7 @@ SCORE_TO_STATUS = {1.0: "Implemented", 0.5: "Partially Implemented", 0.0: "Not I
 # System prompt
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You are a senior cybersecurity analyst performing vendor risk assessments
-using the FAIR risk model. You evaluate vendor security documentation against six control categories.
+using the FAIR risk model. You evaluate vendor security documentation against control categories.
 
 For each control, you must assess:
 1. Implementation score: 1.0 = Fully Implemented, 0.5 = Partially Implemented, 0.0 = Not Implemented
@@ -135,95 +137,49 @@ For each control, you must assess:
 4. Whether follow-up is required from the vendor (true/false)
 5. What specific information needs follow-up (or "" if none)
 
+Scoring guidance:
+- Attestation/audit reports (SOC 2 Type II, ISO 27001, pen test): if the auditor confirmed the
+  control operated effectively, score 1.0 and note the finding in 'where_found'
+  (e.g., "SOC 2 Type II — CC6.1, tested effective"). Score 0.5 if noted with exceptions.
+- Policy/procedure documents that merely state a control exists: score 0.5 unless implementation
+  evidence is provided (configuration details, screenshots, training records, etc.) — then 1.0.
+- A control not mentioned anywhere in the documentation: score 0.0.
+
 Be precise and evidence-based. Quote or closely paraphrase the document."""
 
 
-def _build_user_prompt(vendor_name: str) -> str:
-    """Build the structured review prompt with full control key scaffolding."""
-    return f"""Review the security documentation for {vendor_name} against all 60 controls across the 6 categories below.
+def _build_user_prompt(vendor_name: str, applicable_categories: set = None) -> str:
+    """Build the structured review prompt; excludes AI controls for non-AI-enabled vendors."""
+    cats = applicable_categories or set(CONTROL_CATEGORIES.keys())
+    # Preserve canonical category order
+    ordered_cats = [c for c in CONTROL_CATEGORIES if c in cats]
+    n_controls   = sum(len(CONTROL_CATEGORIES[c]) for c in ordered_cats)
+    ai_note      = "" if "ai" in cats else \
+        "\nNote: AI Risk Controls are excluded — this vendor's product/service is not AI-enabled.\n"
 
-Return ONLY valid JSON (no markdown fences) using exactly this structure.
-Use only 0, 0.5, or 1.0 for scores. Every key must be present.
+    # Build the JSON scaffold dynamically so AI block is omitted when not applicable
+    blank = '{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}'
+    cat_blocks = []
+    for cat in ordered_cats:
+        ctrl_lines = ",\n      ".join(
+            f'"{k}": {blank}'
+            for k in CONTROL_CATEGORIES[cat]
+        )
+        cat_blocks.append(f'    "{cat}": {{\n      {ctrl_lines}\n    }}')
+    details_json = ",\n".join(cat_blocks)
 
-{{
-  "vendor": "{vendor_name}",
-  "control_details": {{
-    "access": {{
-      "multi_factor_authentication":            {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "privileged_access_management":           {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "least_privilege_rbac":                   {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "identity_lifecycle_management":          {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "periodic_access_reviews":               {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "single_sign_on_central_identity":        {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "session_management_timeout_controls":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "authentication_logging_monitoring":      {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "credential_storage_security":            {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "account_lockout_brute_force_protection": {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}}
-    }},
-    "data_security": {{
-      "encryption_at_rest":          {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "encryption_in_transit":       {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "data_access_restrictions":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "data_classification_program": {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "database_security_controls":  {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "data_loss_prevention":        {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "key_management_security":     {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "secure_backup_protection":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "data_retention_policies":     {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "data_integrity_validation":   {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}}
-    }},
-    "integration": {{
-      "api_authentication":             {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "secure_credential_storage":      {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "input_validation_sanitization":  {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "api_authorization_controls":     {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "rate_limiting_abuse_protection": {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "integration_logging":            {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "transport_security_tls":         {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "api_gateway_security":           {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "vendor_integration_reviews":     {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "service_account_restrictions":   {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}}
-    }},
-    "ai": {{
-      "training_data_governance":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "model_access_control":        {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "model_validation_testing":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "output_monitoring":           {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "prompt_injection_protection": {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "human_oversight_review":      {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "model_version_control":       {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "model_security_monitoring":   {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "model_input_sanitization":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "third_party_ai_risk_review":  {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}}
-    }},
-    "availability": {{
-      "system_redundancy_failover":   {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "backup_restore_capability":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "disaster_recovery_plan":       {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "infrastructure_monitoring":    {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "capacity_planning":            {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "incident_response_procedures": {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "network_resilience":           {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "patch_management":             {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "load_balancing":               {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "service_recovery_testing":     {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}}
-    }},
-    "governance": {{
-      "security_policy_framework":          {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "risk_management_program":            {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "third_party_risk_management":        {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "security_awareness_training":        {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "compliance_certifications":          {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "security_incident_reporting":        {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "vulnerability_management_program":   {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "change_management":                  {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "audit_program":                      {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}},
-      "security_leadership_governance":     {{"score": 0, "where_found": "", "language": "", "follow_up_required": false, "follow_up_info": ""}}
-    }}
-  }},
-  "gaps": [],
-  "overall_summary": ""
-}}"""
+    return (
+        f'Review the security documentation for {vendor_name} against {n_controls} controls '
+        f'across {len(ordered_cats)} categories below.{ai_note}\n\n'
+        f'Return ONLY valid JSON (no markdown fences) using exactly this structure.\n'
+        f'Use only 0, 0.5, or 1.0 for scores. Every key must be present.\n\n'
+        f'{{\n'
+        f'  "vendor": "{vendor_name}",\n'
+        f'  "control_details": {{\n{details_json}\n  }},\n'
+        f'  "gaps": [],\n'
+        f'  "overall_summary": ""\n'
+        f'}}'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,22 +192,17 @@ SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".docx"}
 VALID_SCORES = {0, 0.5, 1.0}
 
 # All expected control keys per category — used for schema validation (A08)
+# Built from CONTROL_CATEGORIES to stay in sync with the engine automatically.
 EXPECTED_CONTROLS: dict[str, set[str]] = {
     cat: set(controls.keys())
-    for cat, controls in {
-        "access":        __import__("vendor_risk_engine", fromlist=["ACCESS_CONTROLS"]).ACCESS_CONTROLS,
-        "data_security": __import__("vendor_risk_engine", fromlist=["DATA_SECURITY_CONTROLS"]).DATA_SECURITY_CONTROLS,
-        "integration":   __import__("vendor_risk_engine", fromlist=["INTEGRATION_RISK_CONTROLS"]).INTEGRATION_RISK_CONTROLS,
-        "ai":            __import__("vendor_risk_engine", fromlist=["AI_RISK_CONTROLS"]).AI_RISK_CONTROLS,
-        "availability":  __import__("vendor_risk_engine", fromlist=["AVAILABILITY_RISK_CONTROLS"]).AVAILABILITY_RISK_CONTROLS,
-        "governance":    __import__("vendor_risk_engine", fromlist=["GOVERNANCE_RISK_CONTROLS"]).GOVERNANCE_RISK_CONTROLS,
-    }.items()
+    for cat, controls in CONTROL_CATEGORIES.items()
 }
 
 
-def _validate_llm_response(review: dict) -> None:
+def _validate_llm_response(review: dict, applicable_categories: set = None) -> None:
     """
     Validate the structure and values of the LLM JSON response (A08).
+    Only validates categories in applicable_categories (AI omitted for non-AI vendors).
     Raises ValueError with a descriptive message on any violation.
     """
     if not isinstance(review, dict):
@@ -260,8 +211,12 @@ def _validate_llm_response(review: dict) -> None:
     if "control_details" not in review:
         raise ValueError("LLM response missing 'control_details' key.")
 
+    cats_to_check = applicable_categories or set(EXPECTED_CONTROLS.keys())
+
     details = review["control_details"]
     for category, expected_keys in EXPECTED_CONTROLS.items():
+        if category not in cats_to_check:
+            continue  # skip non-applicable categories (e.g. AI for non-AI vendors)
         if category not in details:
             raise ValueError(f"LLM response missing category '{category}'.")
 
@@ -360,8 +315,10 @@ def _extract_text(file_path: str) -> str:
         return f.read()
 
 
-def _build_questionnaire_data() -> dict:
-    """Build the questionnaire structure to send to the frontend."""
+def _build_questionnaire_data(applicable_categories: set = None) -> dict:
+    """Build the questionnaire structure to send to the frontend.
+    Excludes categories not in applicable_categories (e.g. AI for non-AI vendors)."""
+    cats = applicable_categories or set(CONTROL_CATEGORIES.keys())
     return {
         category: {
             "label": CATEGORY_DISPLAY_NAMES.get(category, category),
@@ -375,6 +332,7 @@ def _build_questionnaire_data() -> dict:
             ],
         }
         for category, controls in CONTROL_CATEGORIES.items()
+        if category in cats
     }
 
 
@@ -382,12 +340,16 @@ def _build_from_questionnaire(
     vendor_name: str,
     questionnaire_answers: dict,
     emit: Callable[[str], None],
+    applicable_categories: set = None,
 ) -> tuple[dict, list[str], str]:
     """Build control_details, gaps, and overall_summary from questionnaire answers."""
+    cats = applicable_categories or set(CONTROL_CATEGORIES.keys())
     control_details: dict = {}
     gaps: list[str] = []
 
     for category, controls in CONTROL_CATEGORIES.items():
+        if category not in cats:
+            continue
         control_details[category] = {}
         cat_answers = questionnaire_answers.get(category, {})
 
@@ -493,15 +455,33 @@ def review_security_documentation(
     company_revenue: float = 0.0,
     questionnaire_answers: dict | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    is_ai_enabled: bool = True,
+    has_attestation: bool = False,
+    loss_magnitude_components: dict | None = None,
+    distributions: dict | None = None,
 ) -> dict:
     """
     Review vendor security documentation (or questionnaire answers) and compute FAIR risk.
 
     Args:
-        doc_source:            Path to a file or folder, or None if no documents.
-        questionnaire_answers: Pre-scored controls from the UI questionnaire.
-                               When provided, skips LLM doc review entirely.
-        progress_callback:     Optional callable(msg) for real-time progress updates.
+        doc_source:               Path to a file or folder, or None if no documents.
+        questionnaire_answers:    Pre-scored controls from the UI questionnaire.
+                                  When provided, skips LLM doc review entirely.
+        progress_callback:        Optional callable(msg) for real-time progress updates.
+        is_ai_enabled:            Whether the vendor's product/service uses AI/ML features.
+                                  When False, AI Risk Controls are excluded from scoring
+                                  and do not contribute to the residual risk calculation.
+        loss_magnitude_components: Dict of structured loss magnitude inputs for
+                                  calculate_loss_magnitude(). When provided, replaces the
+                                  loss_magnitude scalar with a component-based total.
+                                  Keys: breach_notification_cost, regulatory_fine_exposure,
+                                  incident_response_cost, downtime_cost_per_hour,
+                                  estimated_downtime_hours, reputation_damage_pct,
+                                  annual_revenue.
+        distributions:            Dict of (min, likely, max) tuples for Monte Carlo simulation.
+                                  Keys: contact_frequency, probability_of_action,
+                                  threat_capability, resistance_strength, loss_magnitude.
+                                  When provided, P10/P50/P90 distribution output is included.
     """
     def emit(msg: str):
         if progress_callback:
@@ -509,11 +489,43 @@ def review_security_documentation(
         else:
             print(msg)
 
+    # --- Resolve applicable categories (exclude AI for non-AI vendors) ---
+    applicable_categories = set(CONTROL_CATEGORIES.keys())
+    if not is_ai_enabled:
+        applicable_categories.discard("ai")
+        emit("AI Risk Controls excluded — vendor product/service is not AI-enabled.")
+
+    # --- Attestation multiplier — set by user checkbox, not LLM auto-detection ---
+    # ×1.0 when third-party attestation is confirmed — controls accepted at full face value.
+    # ×0.85 when no attestation — self-reported controls are discounted 15% for lack of
+    # independent verification (policy doc stating a control ≠ auditor confirming it works).
+    attestation_multiplier = 1.0 if has_attestation else 0.85
+    if has_attestation:
+        emit("Third-party attestation confirmed — controls accepted at full value (×1.0).")
+    else:
+        emit("No third-party attestation — applying ×0.85 skepticism discount to control scores.")
+
+    # --- Resolve loss magnitude (structured components take precedence) ---
+    if loss_magnitude_components:
+        lm_result = calculate_loss_magnitude(**loss_magnitude_components)
+        loss_magnitude = lm_result["total"]
+        lm_dist = lm_result["distribution"]
+        lm_source = "Structured component calculation (FAIR primary + secondary loss)"
+        emit(f"Structured loss magnitude: ${loss_magnitude:,.0f} "
+             f"(range ${lm_dist['min']:,.0f}–${lm_dist['max']:,.0f})")
+        # Add loss magnitude distribution for Monte Carlo
+        if distributions is None:
+            distributions = {}
+        distributions["loss_magnitude"] = (lm_dist["min"], lm_dist["likely"], lm_dist["max"])
+    else:
+        lm_result = None
+        lm_source = "Product/service revenue estimate"
+
     # --- Determine control scores source ---
     if questionnaire_answers is not None:
         # Use questionnaire answers directly — no LLM review needed
         control_details, gaps, overall_summary = _build_from_questionnaire(
-            vendor_name, questionnaire_answers, emit
+            vendor_name, questionnaire_answers, emit, applicable_categories
         )
     elif doc_source:
         # LLM document review path
@@ -539,7 +551,7 @@ def review_security_documentation(
             f"Review all documents together as a unified evidence set — a control may be evidenced "
             f"across multiple files.\n\n"
             f"{combined_docs}\n\n"
-            f"{_build_user_prompt(vendor_name)}"
+            f"{_build_user_prompt(vendor_name, applicable_categories)}"
         )
 
         response = _get_client().chat.completions.create(
@@ -561,7 +573,7 @@ def review_security_documentation(
             raise ValueError(f"LLM returned invalid JSON: {exc}") from exc
 
         # Validate and sanitize all LLM output before use (A08, A03)
-        _validate_llm_response(review)
+        _validate_llm_response(review, applicable_categories)
 
         control_details  = review["control_details"]
         gaps             = review.get("gaps", [])
@@ -570,7 +582,8 @@ def review_security_documentation(
         # No documents and no questionnaire — signal the caller to request questionnaire
         return {
             "questionnaire_required": True,
-            "questionnaire_data": _build_questionnaire_data(),
+            "questionnaire_data": _build_questionnaire_data(applicable_categories),
+            "is_ai_enabled": is_ai_enabled,
         }
 
     # --- Calculate control effectiveness scores ---
@@ -584,10 +597,26 @@ def review_security_documentation(
     control_scores_for_risk: dict = {}
 
     for category, controls in control_scores_flat.items():
-        result = calculate_control_strength(category, controls)
+        result = calculate_control_strength(category, controls, attestation_multiplier)
         category_results[category]        = result
         control_scores_for_risk[category] = result["score"]
-        emit(f"  {category:<15} score={result['score']:.4f}  rating={result['rating']}")
+        attest_note = " [attested]" if result.get("attestation_applied") else ""
+        emit(f"  {category:<15} score={result['score']:.4f}  rating={result['rating']}{attest_note}")
+
+    # --- Build input provenance for audit trail (#7) ---
+    input_sources = {
+        "contact_frequency_source":     "Threat intelligence (DBIR / CISA / FBI IC3 / MITRE ATT&CK)",
+        "probability_of_action_source": "Threat intelligence (Verizon DBIR actor motivation data)",
+        "threat_capability_source":     "Threat intelligence (MITRE ATT&CK technique prevalence)",
+        "resistance_strength_source":   "Threat intelligence (DBIR sector baseline security posture)",
+        "loss_magnitude_source":        lm_source,
+        "control_scores_source":        "LLM document review (GPT-4o)" if doc_source else "User questionnaire",
+        "attestation_multiplier":       attestation_multiplier,
+        "has_attestation":              has_attestation,
+        "methodology":                  "FAIR (Open FAIR Body of Knowledge v2.0) + Monte Carlo triangular distributions",
+        "reduction_ceiling_reference":  "NIST SP 800-30 Rev.1 / IBM 2024 Cost of a Data Breach Report",
+        "governance_split_reference":   "FAIR-CAM v1.0 / SANS administrative control classification",
+    }
 
     emit("Calculating FAIR risk scores...")
     risk = calculate_residual_risk(
@@ -598,6 +627,9 @@ def review_security_documentation(
         loss_magnitude=loss_magnitude,
         control_scores=control_scores_for_risk,
         company_revenue=company_revenue,
+        applicable_categories=applicable_categories,
+        input_sources=input_sources,
+        distributions=distributions,
     )
 
     # --- Mitigation recommendations ---
@@ -614,13 +646,19 @@ def review_security_documentation(
         "overall_summary":           overall_summary,
         "risk":                      risk,
         "fair_inputs": {
-            "contact_frequency":    contact_frequency,
+            "contact_frequency":     contact_frequency,
             "probability_of_action": probability_of_action,
-            "threat_capability":    threat_capability,
-            "resistance_strength":  resistance_strength,
-            "product_revenue":      loss_magnitude,
-            "company_revenue":      company_revenue,
+            "threat_capability":     threat_capability,
+            "resistance_strength":   resistance_strength,
+            "product_revenue":       loss_magnitude,
+            "company_revenue":       company_revenue,
+            "loss_magnitude_components": lm_result["components"] if lm_result else None,
         },
+        "is_ai_enabled":             is_ai_enabled,
+        "applicable_categories":     sorted(applicable_categories),
+        "has_attestation":           has_attestation,
+        "attestation_multiplier":    attestation_multiplier,
+        "input_provenance":          input_sources,
         "mitigation_recommendations": recommendations,
     }
 

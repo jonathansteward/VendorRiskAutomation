@@ -45,7 +45,7 @@ from doc_review_agent import (
     review_security_documentation,
 )
 from threat_intel import INDUSTRY_SECTORS, fetch_threat_intel
-from vendor_risk_engine import calculate_inherent_risk, rate_risk
+from vendor_risk_engine import ATTESTATION_MULTIPLIERS, calculate_inherent_risk, rate_risk
 
 # ---------------------------------------------------------------------------
 # Logging — structured audit trail (A09)
@@ -217,12 +217,46 @@ def start_assessment():
     if not industry or industry not in INDUSTRY_SECTORS:
         return jsonify({"error": "A valid industry sector is required."}), 400
 
+    # AI-enabled flag — determines whether AI Risk Controls are scored
+    is_ai_enabled = request.form.get("is_ai_enabled", "yes").strip().lower() != "no"
+
+    # Third-party attestation flag — user confirms vendor has independent control testing evidence
+    has_attestation = request.form.get("has_attestation") == "on"
+
     try:
-        # product_revenue is used as loss_magnitude — the revenue at risk from this vendor
+        # product_revenue is the fallback loss_magnitude when no structured components provided
         product_revenue = _validate_float(request.form.get("product_revenue", "1000000"), "product_revenue", 0, 1_000_000_000)
         # company_revenue is optional — used as a second ARE denominator for materiality
         raw_company_rev = request.form.get("company_revenue", "").strip()
         company_revenue = _validate_float(raw_company_rev, "company_revenue", 0, 1_000_000_000_000) if raw_company_rev else 0.0
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Structured loss magnitude components (optional — override product_revenue if any > 0)
+    loss_magnitude_components = None
+    try:
+        def _opt_float(field, default=0.0):
+            raw = request.form.get(field, "").strip()
+            return _validate_float(raw, field, 0, 1_000_000_000_000) if raw else default
+
+        breach_notification  = _opt_float("breach_notification_cost")
+        regulatory_fines     = _opt_float("regulatory_fine_exposure")
+        incident_response    = _opt_float("incident_response_cost")
+        downtime_per_hour    = _opt_float("downtime_cost_per_hour")
+        downtime_hours       = _opt_float("estimated_downtime_hours")
+        reputation_pct       = _opt_float("reputation_damage_pct")
+
+        if any(v > 0 for v in [breach_notification, regulatory_fines, incident_response,
+                                downtime_per_hour, incident_response, reputation_pct]):
+            loss_magnitude_components = {
+                "breach_notification_cost": breach_notification,
+                "regulatory_fine_exposure": regulatory_fines,
+                "incident_response_cost":   incident_response,
+                "downtime_cost_per_hour":   downtime_per_hour,
+                "estimated_downtime_hours": downtime_hours,
+                "reputation_damage_pct":    reputation_pct,
+                "annual_revenue":           company_revenue,
+            }
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -280,6 +314,7 @@ def start_assessment():
         args=(
             job_id, doc_folder, vendor_name, vendor_website,
             vendor_description, industry, loss_magnitude, company_revenue,
+            is_ai_enabled, has_attestation, loss_magnitude_components,
         ),
         daemon=True,
     )
@@ -422,6 +457,9 @@ def _run_assessment(
     industry: str,
     loss_magnitude: float,
     company_revenue: float = 0.0,
+    is_ai_enabled: bool = True,
+    has_attestation: bool = False,
+    loss_magnitude_components: dict = None,
 ):
     q    = jobs[job_id]["progress_queue"]
     intel: dict = {}
@@ -488,6 +526,10 @@ def _run_assessment(
             loss_magnitude=loss_magnitude,
             company_revenue=company_revenue,
             progress_callback=progress,
+            is_ai_enabled=is_ai_enabled,
+            has_attestation=has_attestation,
+            loss_magnitude_components=loss_magnitude_components,
+            distributions=intel.get("distributions"),
         )
 
         # ── Step 4: Questionnaire fallback if no documents ───────────────────
@@ -518,6 +560,10 @@ def _run_assessment(
                 company_revenue=company_revenue,
                 questionnaire_answers=questionnaire_answers,
                 progress_callback=progress,
+                is_ai_enabled=is_ai_enabled,
+                has_attestation=has_attestation,
+                loss_magnitude_components=loss_magnitude_components,
+                distributions=intel.get("distributions"),
             )
 
         # ── Step 5: Export reports ────────────────────────────────────────────
@@ -552,21 +598,32 @@ def _run_assessment(
                 risk["risk_reduction"] / risk["inherent_risk"] * 100
                 if risk["inherent_risk"] else 0, 1
             ),
+            "risk_distribution": risk.get("distribution"),
             "composite_scores":  risk["composite_scores"],
             "adjusted":          risk["adjusted"],
+            "applicable_categories": assessment.get("applicable_categories", []),
+            "is_ai_enabled":     is_ai_enabled,
+            "has_attestation":    has_attestation,
+            "attestation_multiplier": 1.0 if has_attestation else 0.85,
             "control_effectiveness": {
-                k: {"score": v["score"], "rating": v["rating"]}
+                k: {
+                    "score": v["score"],
+                    "rating": v["rating"],
+                    "attestation_applied": v.get("attestation_applied", False),
+                }
                 for k, v in effectiveness.items()
             },
             "gaps":              assessment.get("gaps", []),
             "overall_summary":   assessment.get("overall_summary", ""),
             "fair_inputs":       assessment.get("fair_inputs", {}),
+            "input_provenance":  assessment.get("input_provenance", {}),
             "threat_intel": {
                 "industry":              industry,
                 "contact_frequency":     contact_frequency,
                 "probability_of_action": probability_of_action,
                 "threat_capability":     threat_capability,
                 "resistance_strength":   resistance_strength,
+                "distributions":         intel.get("distributions", {}),
                 "primary_threat_actors": intel.get("primary_threat_actors", []),
                 "top_attack_vectors":    intel.get("top_attack_vectors", []),
                 "sources_referenced":    intel.get("sources_referenced", []),
