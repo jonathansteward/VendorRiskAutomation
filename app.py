@@ -1,16 +1,5 @@
 """
 Vendor Risk Assessment Platform — Flask Application
-Security hardened per OWASP Top 10:
-  A01 Broken Access Control     — job ownership tokens, download whitelist
-  A02 Cryptographic Failures    — no sensitive data in logs or error responses
-  A03 Injection                 — secure_filename, strict input validation
-  A04 Insecure Design           — replaced monkey-patch with logging callbacks
-  A05 Security Misconfiguration — security headers, no debug mode, port from env
-  A06 Vulnerable Components     — file-type whitelist, size limits
-  A07 Auth/Auth Failures        — job ownership token required for results/download
-  A08 Insecure Deserialization  — JSON schema validation on LLM output
-  A09 Logging/Monitoring        — structured audit log for all sensitive operations
-  A10 SSRF                      — vendor_website not fetched, stored only
 """
 
 import json
@@ -89,6 +78,7 @@ ALLOWED_DOWNLOAD_TYPES = {"xlsx", "pdf"}  # prevents path traversal via file_typ
 
 # In-memory job store: job_id -> {status, access_token, progress_queue, result, error, output_files}
 jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()  # guards all reads/writes to the jobs dict
 
 # ---------------------------------------------------------------------------
 # Input validation helpers (A03)
@@ -224,11 +214,23 @@ def start_assessment():
     has_attestation = request.form.get("has_attestation") == "on"
 
     try:
-        # product_revenue is the fallback loss_magnitude when no structured components provided
+        # product_revenue is the user's estimated breach impact (loss magnitude) when no structured components provided
         product_revenue = _validate_float(request.form.get("product_revenue", "1000000"), "product_revenue", 0, 1_000_000_000)
-        # company_revenue is optional — used as a second ARE denominator for materiality
+        # company_revenue is optional — used to auto-scale ALE risk appetite thresholds
         raw_company_rev = request.form.get("company_revenue", "").strip()
         company_revenue = _validate_float(raw_company_rev, "company_revenue", 0, 1_000_000_000_000) if raw_company_rev else 0.0
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Risk checkpoint — if vendor has no data access and no integration, bypass full assessment
+    processes_data      = request.form.get("processes_data", "yes").strip().lower() == "yes"
+    integrates_systems  = request.form.get("integrates_systems", "yes").strip().lower() == "yes"
+    bypass_assessment   = not processes_data and not integrates_systems
+
+    # Risk appetite thresholds — required unless bypassing
+    try:
+        raw_high = request.form.get("risk_threshold_high", "").strip()
+        high_threshold = _validate_float(raw_high, "risk_threshold_high", 0, 1_000_000_000) if raw_high else 100_000.0
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -247,7 +249,7 @@ def start_assessment():
         reputation_pct       = _opt_float("reputation_damage_pct")
 
         if any(v > 0 for v in [breach_notification, regulatory_fines, incident_response,
-                                downtime_per_hour, incident_response, reputation_pct]):
+                                downtime_per_hour, downtime_hours, reputation_pct]):
             loss_magnitude_components = {
                 "breach_notification_cost": breach_notification,
                 "regulatory_fine_exposure": regulatory_fines,
@@ -293,21 +295,46 @@ def start_assessment():
     access_token    = secrets.token_urlsafe(32)
     progress_queue: queue.Queue = queue.Queue()
 
-    jobs[job_id] = {
-        "status":                "running",
-        "access_token":          access_token,
-        "progress_queue":        progress_queue,
-        "result":                None,
-        "error":                 None,
-        "output_files":          [],
-        "questionnaire_event":   threading.Event(),
-        "questionnaire_answers": None,
-    }
+    with _jobs_lock:
+        jobs[job_id] = {
+            "status":                "running",
+            "access_token":          access_token,
+            "progress_queue":        progress_queue,
+            "result":                None,
+            "error":                 None,
+            "output_files":          [],
+            "questionnaire_event":   threading.Event(),
+            "questionnaire_answers": None,
+        }
 
     audit_log.info(
         "ASSESSMENT_START job=%s vendor=%s industry=%s files=%d ip=%s",
         job_id, vendor_name, industry, len(saved_paths), request.remote_addr,
     )
+
+    # ── Bypass path: no data processing, no integration → immediate Low result ──
+    if bypass_assessment:
+        bypass_result = {
+            "bypass":           True,
+            "vendor":           vendor_name,
+            "vendor_website":   vendor_website,
+            "assessment_date":  date.today().isoformat(),
+            "processes_data":   False,
+            "integrates_systems": False,
+            "inherent_rating":  {"rating": "Low"},
+            "residual_rating":  {"rating": "Low"},
+            "rationale": (
+                "Vendor does not process, store, or transmit company data and does not "
+                "integrate with internal systems or network. No controls assessment or "
+                "FAIR calculation is required."
+            ),
+        }
+        with _jobs_lock:
+            jobs[job_id]["status"] = "complete"
+            jobs[job_id]["result"] = bypass_result
+        jobs[job_id]["progress_queue"].put({"type": "complete", "message": "Low risk — no data or integration exposure.", "result": bypass_result})
+        audit_log.info("ASSESSMENT_BYPASS job=%s vendor=%s ip=%s", job_id, vendor_name, request.remote_addr)
+        return jsonify({"job_id": job_id, "access_token": access_token})
 
     thread = threading.Thread(
         target=_run_assessment,
@@ -315,6 +342,7 @@ def start_assessment():
             job_id, doc_folder, vendor_name, vendor_website,
             vendor_description, industry, loss_magnitude, company_revenue,
             is_ai_enabled, has_attestation, loss_magnitude_components,
+            high_threshold,
         ),
         daemon=True,
     )
@@ -332,21 +360,23 @@ def _check_access(job_id: str, allow_query_param: bool = False) -> tuple[dict | 
     X-Access-Token header to prevent tokens from leaking into server access logs
     and browser history.
     """
-    if job_id not in jobs:
-        return None, (jsonify({"error": "Not found."}), 404)
+    with _jobs_lock:
+        if job_id not in jobs:
+            return None, (jsonify({"error": "Not found."}), 404)
+        job = jobs[job_id]
 
     provided = request.headers.get("X-Access-Token", "")
     if allow_query_param and not provided:
         provided = request.args.get("token", "")
 
-    expected = jobs[job_id].get("access_token", "")
+    expected = job.get("access_token", "")
 
     # Constant-time comparison prevents timing attacks (A02)
     if not secrets.compare_digest(provided, expected):
         audit_log.warning("UNAUTHORIZED_ACCESS job=%s ip=%s", job_id, request.remote_addr)
         return None, (jsonify({"error": "Unauthorized."}), 403)
 
-    return jobs[job_id], None
+    return job, None
 
 
 @app.route("/progress/<job_id>")
@@ -429,8 +459,9 @@ def submit_questionnaire(job_id: str):
     if not answers:
         return jsonify({"error": "Questionnaire answers are required."}), 400
 
-    job["questionnaire_answers"] = answers
-    job["status"] = "running"
+    with _jobs_lock:
+        job["questionnaire_answers"] = answers
+        job["status"] = "running"
     job["questionnaire_event"].set()
 
     audit_log.info("QUESTIONNAIRE_SUBMIT job=%s ip=%s", job_id, request.remote_addr)
@@ -460,6 +491,7 @@ def _run_assessment(
     is_ai_enabled: bool = True,
     has_attestation: bool = False,
     loss_magnitude_components: dict = None,
+    high_threshold: float = 100000.0,
 ):
     q    = jobs[job_id]["progress_queue"]
     intel: dict = {}
@@ -491,7 +523,7 @@ def _run_assessment(
         inherent_risk   = calculate_inherent_risk(
             contact_frequency, probability_of_action, threat_capability, loss_magnitude
         )
-        inherent_rating = rate_risk(inherent_risk, loss_magnitude, company_revenue)
+        inherent_rating = rate_risk(inherent_risk, high_threshold, company_revenue)
         progress(f"Inherent risk: ${inherent_risk:,.0f}/yr ({inherent_rating['rating']})")
 
         _emit(q, "inherent_risk", "Inherent risk calculated.", {
@@ -524,6 +556,7 @@ def _run_assessment(
             threat_capability=threat_capability,
             resistance_strength=resistance_strength,
             loss_magnitude=loss_magnitude,
+            high_threshold=high_threshold,
             company_revenue=company_revenue,
             progress_callback=progress,
             is_ai_enabled=is_ai_enabled,
@@ -534,11 +567,12 @@ def _run_assessment(
 
         # ── Step 4: Questionnaire fallback if no documents ───────────────────
         if assessment.get("questionnaire_required"):
-            jobs[job_id]["status"] = "questionnaire_required"
+            with _jobs_lock:
+                jobs[job_id]["status"] = "questionnaire_required"
             _emit(
                 q, "questionnaire",
                 "No documents available. Please complete the security control questionnaire.",
-                {"categories": assessment["questionnaire_data"]},
+                {"categories": assessment["questionnaire_data"], "is_ai_enabled": is_ai_enabled},
             )
 
             # Wait for questionnaire submission (30-minute timeout)
@@ -546,7 +580,8 @@ def _run_assessment(
             if not got_answers:
                 raise TimeoutError("Questionnaire was not completed within 30 minutes.")
 
-            questionnaire_answers = jobs[job_id]["questionnaire_answers"]
+            with _jobs_lock:
+                questionnaire_answers = jobs[job_id]["questionnaire_answers"]
             progress("Questionnaire received. Calculating control scores...")
 
             assessment = review_security_documentation(
@@ -557,6 +592,7 @@ def _run_assessment(
                 threat_capability=threat_capability,
                 resistance_strength=resistance_strength,
                 loss_magnitude=loss_magnitude,
+                high_threshold=high_threshold,
                 company_revenue=company_revenue,
                 questionnaire_answers=questionnaire_answers,
                 progress_callback=progress,
@@ -576,7 +612,8 @@ def _run_assessment(
         pdf_path = os.path.join(OUTPUT_DIR, f"{safe_name}_risk_report.pdf")
         export_risk_report_pdf(assessment, pdf_path)
 
-        jobs[job_id]["output_files"] = [xlsx_path, pdf_path]
+        with _jobs_lock:
+            jobs[job_id]["output_files"] = [xlsx_path, pdf_path]
 
         risk          = assessment["risk"]
         effectiveness = assessment["control_effectiveness"]
@@ -594,10 +631,6 @@ def _run_assessment(
             "residual_risk":     risk["residual_risk"],
             "residual_rating":   risk["residual_rating"],
             "risk_reduction":    risk["risk_reduction"],
-            "reduction_pct": round(
-                risk["risk_reduction"] / risk["inherent_risk"] * 100
-                if risk["inherent_risk"] else 0, 1
-            ),
             "risk_distribution": risk.get("distribution"),
             "composite_scores":  risk["composite_scores"],
             "adjusted":          risk["adjusted"],
@@ -633,8 +666,9 @@ def _run_assessment(
             "mitigation_recommendations": assessment.get("mitigation_recommendations", []),
         }
 
-        jobs[job_id]["status"] = "complete"
-        jobs[job_id]["result"] = result_summary
+        with _jobs_lock:
+            jobs[job_id]["status"] = "complete"
+            jobs[job_id]["result"] = result_summary
 
         audit_log.info(
             "ASSESSMENT_COMPLETE job=%s vendor=%s industry=%s inherent=%.2f residual=%.2f mitigation_required=%s",
@@ -645,8 +679,9 @@ def _run_assessment(
         _emit(q, "complete", "Assessment complete.", {"result": result_summary})
 
     except Exception as exc:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"]  = str(exc)
+        with _jobs_lock:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"]  = str(exc)
         # Log full exception server-side; send only a generic message to the client (A05)
         audit_log.exception("ASSESSMENT_ERROR job=%s", job_id)
         _emit(q, "error", "Assessment failed. Please check your documents and try again.")

@@ -10,9 +10,9 @@ Given a vendor name, industry sector, and either uploaded security documents or 
 
 1. **Threat Intelligence** — Queries GPT-4o to derive FAIR threat inputs (contact frequency, probability of action, threat capability, resistance strength) from public sources (Verizon DBIR, CISA, FBI IC3, MITRE ATT&CK, IBM X-Force).
 
-2. **Inherent Risk Calculation** — Computes annualized inherent risk in USD before any controls are considered, expressed as an Annualized Risk Exposure (ARE) percentage of loss magnitude.
+2. **Inherent Risk Calculation** — Computes Annualized Loss Expectancy (ALE) in USD before any controls are considered, rated Low / Moderate / High against dollar-based risk appetite thresholds auto-derived from company revenue.
 
-3. **Control Assessment** — Reviews vendor security documentation (PDF, DOCX, TXT, MD) using an AI agent across six control categories:
+3. **Control Assessment** — Reviews vendor security documentation (PDF, DOCX, TXT, MD) using an LLM across six control categories:
    - Access Controls
    - Data Security
    - Integration Risk
@@ -34,7 +34,7 @@ Given a vendor name, industry sector, and either uploaded security documents or 
 | `main.py` | Entry point — starts the Flask server on port 5000 |
 | `threat_intel.py` | GPT-4o integration for FAIR threat input derivation |
 | `vendor_risk_engine.py` | FAIR model calculations — inherent risk, residual risk, control strength scoring |
-| `doc_review_agent.py` | AI document review agent, questionnaire logic, XLSX/PDF report generation |
+| `doc_review_agent.py` | AI document review using LLM, questionnaire logic, XLSX/PDF report generation |
 | `templates/index.html` | Single-page frontend UI |
 
 ## Running the Platform

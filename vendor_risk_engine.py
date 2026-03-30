@@ -200,69 +200,66 @@ def calculate_inherent_risk_distribution(
 
 
 # ---------------------------------------------------------------------------
-# Risk Rating Scale
+# Risk Rating Scale — ALE vs. Risk Appetite Thresholds
 #
-# Expressed as Annualised Risk Exposure (ARE) as a percentage of Loss Magnitude.
-# Using a relative scale makes ratings meaningful regardless of org size or sector.
+# ALE (Annualized Loss Expectancy) is compared against the user-defined High
+# threshold to produce Low / Moderate / High ratings.
 #
-#   ARE % = (annual risk / loss_magnitude) * 100
+# Only the High threshold is user-defined. The Low/Moderate boundary is
+# automatically set at 50% of the High threshold:
 #
-#   LOW       ARE < 20%   — risk is a small fraction of a single loss event per year
-#   MODERATE  20% ≤ ARE < 50% — material exposure; controls or monitoring warranted
-#   HIGH      ARE ≥ 50%   — expected annual loss is half or more of a single event value
-#
-# Rationale for thresholds:
-#   - An ARE of 20% means roughly 1 loss event every 5 years at full magnitude — low
-#   - An ARE of 50% means roughly 1 loss event every 2 years — significant and material
-#   - These align with Ponemon/IBM Cost of a Data Breach frequency data showing
-#     the average breach recurrence cycle across industries
+#   Low       ALE < high_threshold × 0.5
+#   Moderate  high_threshold × 0.5 ≤ ALE < high_threshold
+#   High      ALE ≥ high_threshold
 # ---------------------------------------------------------------------------
-
-RISK_SCALE = [
-    (0.20, "Low"),
-    (0.50, "Moderate"),
-    (float("inf"), "High"),
-]
 
 
 def rate_risk(
-    risk_amount: float,
-    loss_magnitude: float,
+    ale: float,
+    high_threshold: float,
     company_revenue: float = 0.0,
 ) -> dict:
     """
-    Assign a risk rating based on ARE (Annualised Risk Exposure as % of Loss Magnitude).
+    Assign a risk rating by comparing ALE against the user-defined High threshold.
+
+    The Low/Moderate boundary is derived automatically as 50% of high_threshold.
 
     Args:
-        risk_amount:      Annual risk in USD (inherent or residual)
-        loss_magnitude:   Expected loss per event used as ARE denominator
-        company_revenue:  Optional — total company annual revenue, used as a second
-                          ARE denominator to show materiality relative to the whole business
+        ale:             Annualized Loss Expectancy in USD/yr (inherent or residual)
+        high_threshold:  ALE at or above this is High (user-defined risk appetite)
+        company_revenue: Optional — when provided, ale_pct_revenue is included in output
 
     Returns:
-        Dict with 'rating' (Low/Moderate/High), 'are_pct' (float),
-        optional 'are_pct_company' (float), and 'scale' definition
+        Dict with 'rating', 'ale', 'thresholds', 'scale', optional 'ale_pct_revenue'
     """
-    are_pct = (risk_amount / loss_magnitude) if loss_magnitude else 0
+    low_threshold = high_threshold * 0.5
 
-    rating = "High"
-    for threshold, label in RISK_SCALE:
-        if are_pct < threshold:
-            rating = label
-            break
+    if ale < low_threshold:
+        rating = "Low"
+    elif ale < high_threshold:
+        rating = "Moderate"
+    else:
+        rating = "High"
+
+    threshold_gap = round(ale - high_threshold, 2)
 
     result = {
-        "rating":  rating,
-        "are_pct": round(are_pct * 100, 1),
+        "rating":        rating,
+        "ale":           round(ale, 2),
+        "threshold_gap": threshold_gap,   # positive = above threshold, negative = within appetite
+        "thresholds": {
+            "low":  round(low_threshold, 2),
+            "high": round(high_threshold, 2),
+        },
         "scale": {
-            "Low":      "ARE < 20%  — less than 1 full loss event every 5 years",
-            "Moderate": "ARE 20–50% — 1 full loss event every 2–5 years",
-            "High":     "ARE ≥ 50%  — 1 full loss event every 1–2 years or more",
+            "Low":      f"ALE < ${low_threshold:,.0f}/yr — Less than risk appetite",
+            "Moderate": f"ALE ${low_threshold:,.0f}–${high_threshold:,.0f}/yr — Less than risk appetite",
+            "High":     f"ALE ≥ ${high_threshold:,.0f}/yr — Greater than risk appetite",
         },
     }
 
     if company_revenue and company_revenue > 0:
-        result["are_pct_company"] = round((risk_amount / company_revenue) * 100, 2)
+        result["ale_pct_revenue"] = round((ale / company_revenue) * 100, 2)
 
     return result
 
@@ -430,43 +427,85 @@ def calculate_control_strength(
 
 
 # ---------------------------------------------------------------------------
-# Residual Risk
+# Residual Risk — FAIR-CAM v1.0 Aligned Control Classification
 #
-# Control type → FAIR component affected:
+# Each control category maps to the FAIR-CAM Loss Event Function it implements,
+# per The FAIR Institute's Control Analysis Model (FAIR-CAM v1.0).
 #
-#   Preventive  (access, integration, ai — when applicable)
-#     → Lowers contact_frequency (reduces threat actor reach / attack surface)
-#     → Raises resistance_strength (hardens vulnerability)
+# FAIR-CAM functions and the FAIR components they affect:
 #
-#   Detective / Corrective  (data_security, availability)
-#     → Lowers loss_magnitude (limits blast radius, enables faster recovery)
+#   Prevention/Avoidance   (A) → ↓ Contact Frequency
+#   Prevention/Deterrence  (B) → ↓ Probability of Action
+#   Prevention/Resistance  (C) → ↓ Susceptibility (Vulnerability)
+#   Detection (Visibility, Monitoring, Recognition) → manages frequency + magnitude
+#   Response (Containment, Resilience, Loss Minimization) (D) → ↓ Loss Magnitude
 #
-#   Administrative / Governance  (governance)
-#     → Split effect: 40% preventive, 60% detective/corrective
+# Category → FAIR-CAM function mapping:
 #
-# Governance 40/60 split rationale:
-#   Administrative controls (policies, training, risk management programs) primarily
-#   improve incident detection speed and response effectiveness rather than directly
-#   preventing threat actor contact — consistent with SANS Institute and FAIR Institute
-#   guidance on administrative control classification (FAIR-CAM v1.0).
-#   The 40% preventive contribution accounts for security awareness training and policy
-#   frameworks that reduce human-error-driven threat events. Per Verizon DBIR 2024,
-#   68% of breaches involve the human element, making training a meaningful preventive factor.
+#   Access Controls         → Resistance (C): MFA, PAM, RBAC, SSO directly harden the
+#                             attack surface against exploitation attempts (core Resistance).
+#                             Account lockout and session controls contribute minor Deterrence (B).
 #
-# Reduction ceilings prevent residual risk from reaching zero even with perfect scores:
-#   Preventive → max 70% reduction to contact_frequency
-#   DC         → max 65% reduction to loss_magnitude
+#   Integration Controls    → Resistance (C): API authentication, input validation, rate limiting,
+#                             and API gateway security resist attacks at integration points.
 #
-# Ceiling justification (NIST SP 800-30 Rev.1 alignment):
-#   NIST SP 800-30 Appendix I states residual risk is never zero because some residual
-#   uncertainty always remains. The 70% preventive ceiling reflects that even optimal
-#   technical controls cannot eliminate all threat contact: social engineering, supply
-#   chain attacks, insider threats, and zero-days persist regardless of access/integration
-#   controls. The 65% DC ceiling reflects that some data loss is unavoidable in severe
-#   incidents even with strong containment capabilities.
-#   Both ceilings are consistent with IBM 2024 Cost of a Data Breach data showing maximum
-#   observed breach cost reduction of ~60% in highest-maturity security programs (Figure 19).
-#   Reference: IBM Security / Ponemon 2024 Cost of a Data Breach Report.
+#   AI Controls             → Resistance (C) + Detection: Prompt injection protection and model
+#                             access control = Resistance; output/security monitoring = Detection.
+#
+#   Data Security Controls  → Detection + Response/Loss Minimization (D): DLP, classification,
+#                             monitoring = Detection (limits breach dwell time → ↓ frequency + magnitude);
+#                             encryption at rest/transit + backup = Loss Minimization (↓ LM).
+#                             Applied as 50% corrective/LM value in the composite.
+#
+#   Availability Controls   → Response: Containment + Resilience (D): DR, backup, failover,
+#                             incident response = Containment and Resilience controls that
+#                             directly reduce loss magnitude when a loss event occurs.
+#
+#   Governance Controls     → Avoidance (A) + Deterrence (B) + Resistance (minor) + Response (minor):
+#                             Risk management, TPRM, security policy = Avoidance (↓ CF by avoiding
+#                             risky vendor relationships / reducing attack surface exposure).
+#                             Security awareness training = Deterrence (↓ PoA; Verizon DBIR 2024:
+#                             68% of breaches involve human element — training directly reduces PoA).
+#                             Vulnerability management, change management = Resistance (↓ susceptibility).
+#                             Incident response procedures, incident reporting = Response (↓ LM).
+#
+# Composite score construction (three independent FAIR composites):
+#
+#   effective_tef      (Avoidance + Deterrence → ↓ CF and PoA):
+#     Governance 40%  — TPRM, risk mgmt, policy = Avoidance; awareness = Deterrence
+#     Access 20%      — lockout, session mgmt = minor Deterrence effect on PoA
+#
+#   effective_resistance (Resistance → ↓ Susceptibility / Vulnerability):
+#     Access, Integration, AI = primary Resistance controls (when applicable)
+#     Governance 40%  — vuln management, change management, audit = Resistance contribution
+#
+#   effective_lm       (Detection + Response → ↓ Loss Magnitude):
+#     Data Security 50% — Detection (DLP, monitoring) + Loss Minimization (encryption)
+#     Availability 100% — Containment + Resilience (DR, backup, IR)
+#     Governance 20%   — IR procedures, incident reporting = Response
+#
+# Vulnerability normalization — inherent/residual consistency:
+#   Inherent risk uses vulnerability = 1.0 (resistance = 0, per FAIR spec).
+#   Residual vulnerability must normalize against the no-controls baseline so that
+#   zero controls → residual_risk = inherent_risk. Formula:
+#     vuln_ratio = (1 − adj_resistance) / (1 − baseline_resistance)
+#   This ratio is 1.0 with no controls and decreases as Resistance controls take effect.
+#
+# Calibrated reduction ceilings (per IBM 2024 Cost of a Data Breach + NIST SP 800-30 Rev.1):
+#   TEF        → max 45% reduction (Avoidance + Deterrence ceiling)
+#   Resistance → boost = effective_resistance × 0.40 × (1 − RS_baseline), capped at 0.75
+#   LM         → max 40% reduction (Detection + Response ceiling)
+#
+#   Ceilings prevent triple-compounding of CF × vuln × LM from producing near-zero residuals
+#   at average control levels. IBM 2024 CODB: highest-maturity programs reduce costs ~33%
+#   vs. lowest-maturity benchmarks. Theoretical max (no controls → best-in-class): ~70%
+#   reduction per NIST SP 800-30 Appendix I (residual risk is never zero).
+#
+# Verified output ranges:
+#   0% controls   → residual = 100% of inherent
+#   ~25% controls → residual ≈ 65–75% of inherent
+#   50% controls  → residual ≈ 45–55% of inherent
+#   100% controls → residual ≈ 28–35% of inherent
 # ---------------------------------------------------------------------------
 
 def calculate_residual_risk(
@@ -475,6 +514,7 @@ def calculate_residual_risk(
     threat_capability: float,
     resistance_strength: float,
     loss_magnitude: float,
+    high_threshold: float,
     control_scores: dict,
     company_revenue: float = 0.0,
     applicable_categories: set = None,
@@ -491,11 +531,12 @@ def calculate_residual_risk(
         threat_capability:      Threat actor capability relative to controls (0.0–1.0)
         resistance_strength:    Baseline control resistance before scoring (0.0–1.0)
         loss_magnitude:         Expected loss in USD per loss event
+        high_threshold:         ALE at or above this is High — Low/Moderate boundary auto-set at 50%
         control_scores:         Dict of category -> effectiveness score (0.0–1.0) from
                                 calculate_control_strength(). Expected keys:
                                 'access', 'integration', 'ai' (if applicable),
                                 'data_security', 'availability', 'governance'
-        company_revenue:        Optional total company annual revenue for secondary ARE
+        company_revenue:        Optional total company annual revenue — used to compute ale_pct_revenue
         applicable_categories:  Set of category keys included in composite scoring.
                                 Omit 'ai' for non-AI-enabled vendors. Defaults to all 6.
         input_sources:          Optional dict logged as 'input_provenance' in the output.
@@ -516,45 +557,75 @@ def calculate_residual_risk(
     applicable = applicable_categories if applicable_categories is not None else \
                  {"access", "integration", "ai", "data_security", "availability", "governance"}
 
-    # --- Composite scores by control type ---
-    preventive_cats  = [c for c in ["access", "integration", "ai"] if c in applicable]
-    preventive_score = (
-        sum(control_scores.get(c, 0) for c in preventive_cats) / len(preventive_cats)
-    ) if preventive_cats else 0.0
+    gov_score    = control_scores.get("governance", 0)
+    access_score = control_scores.get("access", 0)
 
-    dc_score    = (control_scores.get("data_security", 0) + control_scores.get("availability", 0)) / 2
-    admin_score = control_scores.get("governance", 0)
+    # ── FAIR-CAM Composite 1: Avoidance + Deterrence → ↓ Contact Frequency / PoA ──
+    # Governance (40%): risk mgmt, TPRM, security policy = Avoidance (A);
+    #                   awareness training = Deterrence (B)
+    # Access (20%):     account lockout, session timeout = minor Deterrence (B) on PoA
+    effective_tef = min(0.90, gov_score * 0.40 + access_score * 0.20)
 
-    # --- Preventive controls: lower contact_frequency and raise resistance ---
-    # Governance contributes 40% of its score as a preventive amplifier (see rationale above)
-    effective_preventive = min(1.0, preventive_score + admin_score * 0.40)
+    adj_contact_frequency = contact_frequency * (1 - effective_tef * 0.45)
 
-    adj_contact_frequency = contact_frequency * (1 - effective_preventive * 0.70)
-    adj_resistance = min(
-        1.0,
-        resistance_strength + effective_preventive * (1 - resistance_strength)
+    # ── FAIR-CAM Composite 2: Resistance → ↓ Susceptibility (Vulnerability) ──
+    # Access, Integration, AI = primary Resistance (C) controls
+    # Governance (40%): vuln management, change management, audit = Resistance contribution
+    resist_cats  = [c for c in ["access", "integration", "ai"] if c in applicable]
+    resist_base  = (sum(control_scores.get(c, 0) for c in resist_cats) / len(resist_cats)) \
+                   if resist_cats else 0.0
+    effective_resistance = min(0.90, resist_base + gov_score * 0.40)
+
+    # TC modulates how effective resistance controls are against the attacker:
+    # high-capability threat actors partially overcome defenses (20% discount at TC=1.0).
+    # This makes threat_capability meaningful in the residual calculation.
+    tc_resistance_scale = 1.0 - threat_capability * 0.20
+
+    # Boost baseline resistance by a fraction of the remaining gap.
+    # adj_resistance >= resistance_strength always (controls can only help, never hurt).
+    # Capped at 0.95: no vendor fully eliminates susceptibility — zero-days and
+    # insider threats persist regardless of control maturity (NIST SP 800-30 Rev.1).
+    adj_resistance = max(
+        resistance_strength,
+        min(0.95, resistance_strength
+            + effective_resistance * 0.40 * tc_resistance_scale * (1 - resistance_strength))
     )
 
-    # --- Detective/Corrective controls: lower loss_magnitude ---
-    # Governance contributes 60% of its score as a detective/corrective amplifier (see rationale above)
-    effective_dc = min(1.0, dc_score + admin_score * 0.60)
+    # ── FAIR-CAM Composite 3: Detection + Response → ↓ Loss Magnitude ──
+    # Data Security (50%): Detection (DLP, monitoring) + Loss Minimization (encryption, backup)
+    # Availability (100%): Containment + Resilience (DR, backup, incident response)
+    # Governance (20%):    IR procedures, incident reporting = Response contribution
+    ds_score = control_scores.get("data_security", 0) if "data_security" in applicable else 0.0
+    av_score = control_scores.get("availability",  0) if "availability"  in applicable else 0.0
+    lm_cats  = sum(1 for c in ["data_security", "availability"] if c in applicable)
+    lm_base  = (ds_score * 0.50 + av_score) / max(1, lm_cats) if lm_cats else 0.0
+    effective_lm = min(0.90, lm_base + gov_score * 0.20)
 
-    adj_loss_magnitude = loss_magnitude * (1 - effective_dc * 0.65)
+    adj_loss_magnitude = loss_magnitude * (1 - effective_lm * 0.40)
 
-    # --- Inherent risk (no controls) ---
+    # ── Inherent risk (no controls, vulnerability = 1.0 per FAIR spec) ──
     inherent_risk = calculate_inherent_risk(
         contact_frequency, probability_of_action,
         threat_capability, loss_magnitude
     )
 
-    # --- Residual risk (controls applied) ---
+    # ── Residual vulnerability ratio — normalized to no-controls baseline ──
+    # vuln_ratio expresses residual susceptibility as a fraction of the sector baseline
+    # (the inherent exposure before any organizational controls are applied).
+    # Formula: vuln_ratio = (1 − adj_resistance) / (1 − baseline_resistance)
+    #   → 1.0 when no org controls are applied (adj_resistance = baseline)
+    #   → decreases as Resistance controls raise adj_resistance above baseline
+    # vuln_ratio is capped at 1.0: controls cannot make residual > inherent.
+    baseline_exposure = max(0.001, 1.0 - resistance_strength)
+    adj_exposure      = max(0.0,   1.0 - adj_resistance)
+    vuln_ratio        = min(1.0, adj_exposure / baseline_exposure)
+
     residual_tef  = adj_contact_frequency * probability_of_action
-    residual_vuln = threat_capability * (1 - adj_resistance)
-    residual_lef  = residual_tef * residual_vuln
+    residual_lef  = residual_tef * vuln_ratio
     residual_risk = round(residual_lef * adj_loss_magnitude, 2)
 
-    inherent_rating = rate_risk(inherent_risk, loss_magnitude, company_revenue)
-    residual_rating = rate_risk(residual_risk, loss_magnitude, company_revenue)
+    inherent_rating = rate_risk(inherent_risk, high_threshold, company_revenue)
+    residual_rating = rate_risk(residual_risk, high_threshold, company_revenue)
 
     result = {
         "inherent_risk":   inherent_risk,
@@ -568,8 +639,10 @@ def calculate_residual_risk(
             "loss_magnitude":      round(adj_loss_magnitude, 2),
         },
         "composite_scores": {
-            "preventive":           round(effective_preventive, 4),
-            "detective_corrective": round(effective_dc, 4),
+            # FAIR-CAM function labels for audit transparency
+            "avoidance_deterrence": round(effective_tef, 4),        # → TEF reduction
+            "resistance":           round(effective_resistance, 4),  # → Susceptibility reduction
+            "detection_response":   round(effective_lm, 4),          # → LM reduction
         },
         "applicable_categories": sorted(applicable),
     }
@@ -592,21 +665,24 @@ def calculate_residual_risk(
             )
 
             residual_dist = None
-            if tc_dist and rs_dist:
+            if rs_dist:
                 residual_samples = []
                 for _ in range(monte_carlo_iterations):
                     s_cf  = random.triangular(*_ordered_triangular(cf_dist))
                     s_poa = random.triangular(*_ordered_triangular(poa_dist))
-                    s_tc  = random.triangular(*_ordered_triangular(tc_dist))
                     s_rs  = random.triangular(*_ordered_triangular(rs_dist))
                     s_lm  = random.triangular(*_ordered_triangular(lm_dist))
 
-                    s_adj_cf = s_cf * (1 - effective_preventive * 0.70)
-                    s_adj_rs = min(1.0, s_rs + effective_preventive * (1 - s_rs))
-                    s_adj_lm = s_lm * (1 - effective_dc * 0.65)
-                    s_tef    = s_adj_cf * s_poa
-                    s_vuln   = s_tc * (1 - s_adj_rs)
-                    residual_samples.append(s_tef * s_vuln * s_adj_lm)
+                    # Apply the same FAIR-CAM formulas using point-estimate composites
+                    s_adj_cf  = s_cf * (1 - effective_tef * 0.45)
+                    s_adj_rs  = max(s_rs, min(0.95,
+                                    s_rs + effective_resistance * 0.40 * tc_resistance_scale * (1 - s_rs)))
+                    s_adj_lm  = s_lm * (1 - effective_lm * 0.40)
+                    s_baseline = max(0.001, 1.0 - s_rs)
+                    s_exposure = max(0.0,   1.0 - s_adj_rs)
+                    s_vuln_r  = min(1.0, s_exposure / s_baseline)
+                    s_tef     = s_adj_cf * s_poa
+                    residual_samples.append(s_tef * s_vuln_r * s_adj_lm)
 
                 residual_samples.sort()
                 n = len(residual_samples)

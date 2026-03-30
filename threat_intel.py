@@ -54,7 +54,26 @@ You must base your values strictly on published data from:
 
 Be precise and cite the specific source and data point that justifies each value.
 For each input, provide a plausible range (min/likely/max) reflecting the spread
-of observed outcomes across organizations in this sector."""
+of observed outcomes across organizations in this sector.
+
+CRITICAL FAIR MODELING REQUIREMENT — PER-ORGANIZATION SCOPE:
+All values must reflect the expected experience of a SINGLE ORGANIZATION with a SINGLE
+VENDOR RELATIONSHIP in this sector — NOT the aggregate volume across the entire sector.
+
+Contact Frequency (CF): This is how many times per year a threat actor makes meaningful
+contact with THIS SPECIFIC VENDOR'S assets that your organization is exposed to through
+its vendor relationship. Sector-wide attack volumes from DBIR/IC3 cover thousands of
+organizations — divide by the number of organizations in the sector to get the
+per-organization rate. Typical realistic values: 1–8 events/year for most sectors.
+A CF of 30 would mean a single vendor faces 30 qualifying threat contacts per year
+that could impact your data — that is only realistic for the highest-value, most
+actively targeted critical infrastructure vendors.
+
+Probability of Action (PoA): Given that a threat actor contacts this vendor's assets,
+the probability they successfully act on that contact. DBIR data shows most attack
+attempts do not succeed — realistic values are 0.05–0.35 for most sectors. Values
+above 0.50 are only appropriate for sectors with extremely low baseline resistance
+and highly motivated, capable adversaries."""
 
 THREAT_INTEL_PROMPT = """Based on the most current publicly available threat intelligence,
 derive the following FAIR model inputs for the {industry} sector.
@@ -67,15 +86,17 @@ Return ONLY valid JSON with exactly this structure:
 
 {{
   "contact_frequency": {{
-    "min":    <float — low-end contact events/year (10th percentile organizations)>,
-    "likely": <float — most probable estimate for a typical organization. Range typically 4–52.>,
-    "max":    <float — high-end contact events/year (90th percentile organizations)>
+    "min":    <float — low-end per-organization contacts/year (10th percentile). Typical range: 0.5–3.>,
+    "likely": <float — most probable per-organization estimate. Typical range: 1–8 for most sectors.>,
+    "max":    <float — high-end per-organization contacts/year (90th percentile). Rarely exceeds 15
+               except for critical infrastructure or financial services under active nation-state targeting.>
   }},
 
   "probability_of_action": {{
-    "min":    <float 0.0–1.0 — lower bound likelihood a threat actor acts on contact>,
-    "likely": <float 0.0–1.0 — most probable estimate based on DBIR actor motivation data>,
-    "max":    <float 0.0–1.0 — upper bound likelihood>
+    "min":    <float 0.0–1.0 — lower bound. Most sectors: 0.05–0.15.>,
+    "likely": <float 0.0–1.0 — most probable. DBIR shows most attempts fail. Typical range: 0.10–0.30.>,
+    "max":    <float 0.0–1.0 — upper bound. Values above 0.50 only appropriate for sectors with
+               extremely low resistance and highly motivated, capable adversaries.>
   }},
 
   "threat_capability": {{
@@ -187,10 +208,17 @@ def fetch_threat_intel(industry: str) -> dict:
         raise ValueError(f"Threat intel response was not valid JSON: {exc}") from exc
 
     # Extract distribution ranges (min, likely, max) for each FAIR input
-    cf_dist  = _extract_range(data.get("contact_frequency"),     "contact_frequency",     1,    365, 6,    12,   24)
-    poa_dist = _extract_range(data.get("probability_of_action"), "probability_of_action", 0.05, 1,   0.15, 0.30, 0.55)
-    tc_dist  = _extract_range(data.get("threat_capability"),     "threat_capability",     0.10, 1,   0.35, 0.60, 0.85)
-    rs_dist  = _extract_range(data.get("resistance_strength"),   "resistance_strength",   0.05, 1,   0.15, 0.30, 0.55)
+    # Absolute bounds and defaults reflect per-organization, per-vendor-relationship scope.
+    # CF abs_max = 52 (once/week): exceeding this would imply a single vendor faces a
+    # qualifying threat contact more than weekly, which is only realistic for the most
+    # targeted critical infrastructure — not a general sector baseline.
+    # PoA abs_max = 0.60: probability that a threat actor acts given contact; DBIR data
+    # shows most attack attempts do not succeed, so values above 0.60 are not credible
+    # as a sector-wide baseline for a typical single vendor relationship.
+    cf_dist  = _extract_range(data.get("contact_frequency"),     "contact_frequency",     0.5,  52,   1,    4,    10)
+    poa_dist = _extract_range(data.get("probability_of_action"), "probability_of_action", 0.05, 0.60, 0.08, 0.18, 0.35)
+    tc_dist  = _extract_range(data.get("threat_capability"),     "threat_capability",     0.10, 1,    0.35, 0.60, 0.85)
+    rs_dist  = _extract_range(data.get("resistance_strength"),   "resistance_strength",   0.05, 1,    0.15, 0.30, 0.55)
 
     result = {
         # Scalar likely-values for backward compatibility with downstream code

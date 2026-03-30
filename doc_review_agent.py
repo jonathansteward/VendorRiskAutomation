@@ -396,52 +396,203 @@ def _build_from_questionnaire(
     return control_details, gaps, overall_summary
 
 
+# FAIR-CAM function label for each control category — shown in recommendations
+_FAIR_CAM_FUNCTION = {
+    "access":        "Prevention / Resistance",
+    "integration":   "Prevention / Resistance",
+    "ai":            "Prevention / Resistance",
+    "data_security": "Detection + Response",
+    "availability":  "Response / Loss Minimization",
+    "governance":    "Avoidance + Deterrence",
+}
+
+
 def generate_mitigation_recommendations(
     category_effectiveness: dict,
     control_details: dict,
     n_recommendations: int = 7,
+    # FAIR inputs — when provided, priority is computed via marginal risk simulation
+    contact_frequency: float = 0.0,
+    probability_of_action: float = 0.0,
+    threat_capability: float = 0.0,
+    resistance_strength: float = 0.0,
+    loss_magnitude: float = 0.0,
+    high_threshold: float = 0.0,
+    current_residual: float = 0.0,
+    attestation_multiplier: float = 1.0,
+    applicable_categories: set = None,
+    max_per_category: int = 2,
 ) -> list[dict]:
     """
-    Return the top N controls to implement for maximum risk reduction.
+    Return the top N controls that will produce the greatest reduction in residual risk.
 
-    Priority = weight × implementation_gap × (1 − category_score).
-    Only includes categories that are Ineffective or Partially Effective.
+    Improvements over the previous weight × gap × (1 − cat_score) heuristic:
+
+    1. Marginal simulation priority: When FAIR inputs are provided, each candidate
+       control is evaluated by simulating full implementation and computing the actual
+       change in residual risk. This correctly accounts for which FAIR-CAM composite
+       (TEF, Resistance, LM) is the binding constraint — so a high-weight control in
+       a category whose composite is already near ceiling ranks lower than a lower-weight
+       control in an under-addressed composite.
+
+    2. Composite headroom awareness: Controls in categories whose FAIR-CAM composite
+       is already saturated (effective_tef, effective_resistance, or effective_lm near
+       ceiling) naturally produce lower simulated reductions and rank lower without
+       needing explicit rules.
+
+    3. Category diversity cap (max_per_category): Prevents all recommendations from
+       clustering in a single ineffective category when others also have gaps. The cap
+       is enforced during selection; if the total pool is too small to fill n_recommendations
+       with diversity, the cap is relaxed to backfill.
+
+    4. Risk-appetite flagging: Controls that, if implemented, would push residual risk
+       below the High threshold are flagged with 'reduces_to_appetite'. This highlights
+       the highest-leverage controls for meeting risk appetite.
+
+    Args:
+        category_effectiveness: {category: {"score": float, "rating": str}}
+        control_details:        {category: {control_key: {"score": float, ...}}}
+        n_recommendations:      Total recommendations to return (default 7)
+        contact_frequency:      FAIR input — threat events per year
+        probability_of_action:  FAIR input — 0.0–1.0
+        threat_capability:      FAIR input — 0.0–1.0
+        resistance_strength:    FAIR baseline resistance — 0.0–1.0
+        loss_magnitude:         FAIR input — USD per loss event
+        high_threshold:         Risk appetite High threshold — USD/yr
+        current_residual:       Current residual risk (USD/yr) — used for delta calculation
+        attestation_multiplier: Multiplier applied when re-scoring simulated controls
+        applicable_categories:  Categories in scope (omit 'ai' for non-AI vendors)
+        max_per_category:       Max recs from any single category (diversity, default 2)
+
+    Returns:
+        List of recommendation dicts sorted by priority_score descending.
+        Includes 'fair_cam_function' (which FAIR component the control affects) and
+        'reduces_to_appetite' (True if implementing this control meets risk appetite).
     """
-    recommendations: list[dict] = []
+    from vendor_risk_engine import calculate_control_strength, calculate_residual_risk
 
-    for category, effectiveness in category_effectiveness.items():
-        if effectiveness.get("rating") == "Effective":
-            continue
+    applicable = applicable_categories or set(category_effectiveness.keys())
+    use_simulation = (
+        contact_frequency > 0
+        and probability_of_action > 0
+        and loss_magnitude > 0
+        and current_residual > 0
+    )
 
-        cat_score  = effectiveness.get("score", 0.0)
-        weights    = CONTROL_CATEGORIES.get(category, {})
-        cat_ctrls  = control_details.get(category, {})
+    # Snapshot current per-control implementation scores for simulation reuse
+    current_impls: dict[str, dict] = {}
+    for cat in applicable:
+        cat_ctrls = control_details.get(cat, {})
+        current_impls[cat] = {
+            k: (float(v.get("score", 0.0)) if isinstance(v, dict) else float(v))
+            for k, v in cat_ctrls.items()
+        }
+
+    candidates: list[dict] = []
+
+    for category in applicable:
+        effectiveness = category_effectiveness.get(category, {})
+        cat_score     = effectiveness.get("score", 0.0)
+        weights       = CONTROL_CATEGORIES.get(category, {})
+        cat_ctrls     = control_details.get(category, {})
+        fair_cam_fn   = _FAIR_CAM_FUNCTION.get(category, "")
 
         for control_key, weight in weights.items():
-            detail      = cat_ctrls.get(control_key, {})
+            detail       = cat_ctrls.get(control_key, {})
             current_impl = float(detail.get("score", 0.0)) if isinstance(detail, dict) else float(detail)
 
             if current_impl >= 1.0:
                 continue
 
-            gap      = 1.0 - current_impl
-            priority = weight * gap * (1.0 - cat_score)
+            gap = 1.0 - current_impl
 
-            recommendations.append({
-                "category":       category,
-                "category_label": CATEGORY_DISPLAY_NAMES.get(category, category),
-                "control_key":    control_key,
-                "control_name":   CONTROL_DISPLAY_NAMES.get(
+            if use_simulation:
+                # Simulate this control at 1.0 — re-score the category, then compute
+                # the full residual risk delta. This directly measures marginal impact
+                # and accounts for FAIR-CAM composite saturation automatically.
+                sim_impls = {k: v for k, v in current_impls.get(category, {}).items()}
+                sim_impls[control_key] = 1.0
+
+                sim_cat_score = calculate_control_strength(
+                    category, sim_impls, attestation_multiplier
+                )["score"]
+
+                sim_scores = {
+                    cat: (sim_cat_score if cat == category
+                          else category_effectiveness.get(cat, {}).get("score", 0.0))
+                    for cat in applicable
+                }
+
+                sim_result = calculate_residual_risk(
+                    contact_frequency=contact_frequency,
+                    probability_of_action=probability_of_action,
+                    threat_capability=threat_capability,
+                    resistance_strength=resistance_strength,
+                    loss_magnitude=loss_magnitude,
+                    high_threshold=high_threshold,
+                    control_scores=sim_scores,
+                    applicable_categories=applicable,
+                )
+                marginal_reduction = max(0.0, current_residual - sim_result["residual_risk"])
+
+                # Use marginal reduction as priority; fall back to heuristic only when
+                # simulation yields zero (composite already fully saturated)
+                priority_score = marginal_reduction if marginal_reduction > 0 \
+                    else weight * gap * (1.0 - cat_score)
+
+                # Flag if implementing this single control would bring residual to appetite
+                sim_residual       = sim_result["residual_risk"]
+                reduces_to_appetite = (
+                    high_threshold > 0
+                    and current_residual >= high_threshold
+                    and sim_residual < high_threshold
+                )
+            else:
+                marginal_reduction  = 0.0
+                priority_score      = weight * gap * (1.0 - cat_score)
+                reduces_to_appetite = False
+
+            candidates.append({
+                "category":            category,
+                "category_label":      CATEGORY_DISPLAY_NAMES.get(category, category),
+                "control_key":         control_key,
+                "control_name":        CONTROL_DISPLAY_NAMES.get(
                     control_key, control_key.replace("_", " ").title()
                 ),
-                "current_status": "Not Implemented" if current_impl == 0 else "Partially Implemented",
-                "current_score":  current_impl,
-                "weight":         weight,
-                "priority_score": round(priority, 4),
+                "fair_cam_function":   fair_cam_fn,
+                "current_status":      "Not Implemented" if current_impl == 0 else "Partially Implemented",
+                "current_score":       current_impl,
+                "weight":              weight,
+                "priority_score":      round(priority_score, 4),
+                "reduces_to_appetite": reduces_to_appetite,
             })
 
-    recommendations.sort(key=lambda x: x["priority_score"], reverse=True)
-    return recommendations[:n_recommendations]
+    candidates.sort(key=lambda x: x["priority_score"], reverse=True)
+
+    # Category diversity cap — limits each category to max_per_category slots so that
+    # a single ineffective category doesn't consume all recommendation slots
+    cat_counts: dict[str, int] = {}
+    selected: list[dict]       = []
+
+    for c in candidates:
+        cat = c["category"]
+        if cat_counts.get(cat, 0) < max_per_category:
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            selected.append(c)
+        if len(selected) >= n_recommendations:
+            break
+
+    # Backfill without the cap if diversity left us short
+    if len(selected) < n_recommendations:
+        seen_keys = {c["control_key"] for c in selected}
+        for c in candidates:
+            if c["control_key"] not in seen_keys:
+                selected.append(c)
+                seen_keys.add(c["control_key"])
+            if len(selected) >= n_recommendations:
+                break
+
+    return selected
 
 
 def review_security_documentation(
@@ -452,6 +603,7 @@ def review_security_documentation(
     threat_capability: float,
     resistance_strength: float,
     loss_magnitude: float,
+    high_threshold: float = 100000.0,
     company_revenue: float = 0.0,
     questionnaire_answers: dict | None = None,
     progress_callback: Callable[[str], None] | None = None,
@@ -625,6 +777,7 @@ def review_security_documentation(
         threat_capability=threat_capability,
         resistance_strength=resistance_strength,
         loss_magnitude=loss_magnitude,
+        high_threshold=high_threshold,
         control_scores=control_scores_for_risk,
         company_revenue=company_revenue,
         applicable_categories=applicable_categories,
@@ -633,9 +786,23 @@ def review_security_documentation(
     )
 
     # --- Mitigation recommendations ---
-    recommendations = generate_mitigation_recommendations(category_results, control_details)
+    recommendations = generate_mitigation_recommendations(
+        category_effectiveness=category_results,
+        control_details=control_details,
+        contact_frequency=contact_frequency,
+        probability_of_action=probability_of_action,
+        threat_capability=threat_capability,
+        resistance_strength=resistance_strength,
+        loss_magnitude=loss_magnitude,
+        high_threshold=high_threshold,
+        current_residual=risk["residual_risk"],
+        attestation_multiplier=attestation_multiplier,
+        applicable_categories=applicable_categories,
+    )
     if recommendations:
-        emit(f"Top mitigation: {recommendations[0]['control_name']} ({recommendations[0]['category_label']})")
+        top = recommendations[0]
+        appetite_flag = " ⚑ meets risk appetite" if top.get("reduces_to_appetite") else ""
+        emit(f"Top mitigation: {top['control_name']} ({top['category_label']}){appetite_flag}")
 
     return {
         "vendor":                    vendor_name,
@@ -887,7 +1054,7 @@ def export_risk_report_pdf(assessment: dict, output_path: str) -> None:
         ["Probability of Action", f"{fair_inputs['probability_of_action']:.0%}"],
         ["Threat Capability", f"{fair_inputs['threat_capability']:.0%}"],
         ["Baseline Resistance Strength", f"{fair_inputs['resistance_strength']:.0%}"],
-        ["Product/Service Revenue (Loss Magnitude)", f"${fair_inputs.get('product_revenue', fair_inputs.get('loss_magnitude', 0)):,.0f}"],
+        ["Estimated Loss Magnitude (per breach event)", f"${fair_inputs.get('product_revenue', fair_inputs.get('loss_magnitude', 0)):,.0f}"],
     ]
     if fair_inputs.get("company_revenue"):
         inputs_data.append(["Company Annual Revenue", f"${fair_inputs['company_revenue']:,.0f}"])
@@ -909,18 +1076,17 @@ def export_risk_report_pdf(assessment: dict, output_path: str) -> None:
     story.append(Paragraph("Risk Scores", style_h2))
 
     residual_bg, residual_fg = risk_color(risk["inherent_risk"], risk["residual_risk"])
-    reduction_pct = (
-        risk["risk_reduction"] / risk["inherent_risk"] * 100
-        if risk["inherent_risk"] else 0
-    )
 
     inherent_rating = risk.get("inherent_rating", {})
     residual_rating = risk.get("residual_rating", {})
 
-    def _are_label(rating_dict: dict) -> str:
-        parts = [f"ARE {rating_dict.get('are_pct', 0):.1f}% of product revenue"]
-        if "are_pct_company" in rating_dict:
-            parts.append(f"{rating_dict['are_pct_company']:.2f}% of company revenue")
+    def _ale_label(rating_dict: dict) -> str:
+        parts = []
+        thresholds = rating_dict.get("thresholds", {})
+        if thresholds:
+            parts.append(f"Threshold: Low <${thresholds.get('low', 0):,.0f}  High ≥${thresholds.get('high', 0):,.0f}")
+        if "ale_pct_revenue" in rating_dict:
+            parts.append(f"{rating_dict['ale_pct_revenue']:.2f}% of company revenue")
         return "  |  ".join(parts)
 
     risk_data = [
@@ -928,17 +1094,21 @@ def export_risk_report_pdf(assessment: dict, output_path: str) -> None:
         [
             "Inherent Risk (no controls)",
             f"${risk['inherent_risk']:,.2f}",
-            f"{inherent_rating.get('rating', '')}  —  {_are_label(inherent_rating)}",
+            f"{inherent_rating.get('rating', '')}  —  {_ale_label(inherent_rating)}",
         ],
         [
             "Residual Risk (controls applied)",
             f"${risk['residual_risk']:,.2f}",
-            f"{residual_rating.get('rating', '')}  —  {_are_label(residual_rating)}",
+            f"{residual_rating.get('rating', '')}  —  {_ale_label(residual_rating)}",
         ],
         [
-            "Risk Reduction",
-            f"${risk['risk_reduction']:,.2f}",
-            f"{reduction_pct:.1f}% reduction",
+            "vs. Risk Appetite",
+            (
+                f"${abs(residual_rating.get('threshold_gap', 0)):,.2f} Greater than risk appetite"
+                if residual_rating.get("threshold_gap", 0) > 0
+                else f"${abs(residual_rating.get('threshold_gap', 0)):,.2f} Less than risk appetite"
+            ),
+            f"High threshold: ${residual_rating.get('thresholds', {}).get('high', 0):,.0f}/yr",
         ],
     ]
     risk_table = Table(risk_data, colWidths=[2.2 * inch, 1.6 * inch, 3.2 * inch])
@@ -1075,11 +1245,17 @@ def export_risk_report_pdf(assessment: dict, output_path: str) -> None:
             f"<b>Ineffective areas with significant control gaps:</b> {', '.join(ineffective_cats)}.", style_body
         ))
 
+    _gap     = residual_rating.get("threshold_gap", 0)
+    _gap_str = (
+        f"${abs(_gap):,.2f} Greater than risk appetite"
+        if _gap > 0
+        else f"${abs(_gap):,.2f} Less than risk appetite"
+    )
     story.append(Paragraph(
-        f"The application of assessed controls reduces annualized risk exposure from "
+        f"The application of assessed controls reduces annualized loss expectancy from "
         f"<b>${risk['inherent_risk']:,.2f}</b> (inherent) to "
-        f"<b>${risk['residual_risk']:,.2f}</b> (residual), "
-        f"representing a <b>{reduction_pct:.1f}% reduction</b> in expected annual loss.",
+        f"<b>${risk['residual_risk']:,.2f}</b> (residual). "
+        f"Residual ALE is <b>{_gap_str}</b>.",
         style_body,
     ))
 
