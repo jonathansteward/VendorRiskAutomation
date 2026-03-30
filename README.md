@@ -1,6 +1,6 @@
 # VendorRiskAutomation
 
-A web-based vendor risk assessment platform that automates third-party security evaluations using the FAIR (Factor Analysis of Information Risk) quantitative risk model, with FAIR-CAM v1.0 aligned control analysis.
+A web-based vendor risk assessment platform that automates third-party security evaluations using a FAIR-based quantitative risk assessment and control analysis.
 
 ## What It Does
 
@@ -25,18 +25,18 @@ Given a vendor name, industry sector, and either uploaded security documents or 
 
    If the vendor does not process your data or integrate with your systems, the assessment short-circuits and returns low/no risk without running the full FAIR calculation.
 
-4. **Residual Risk Calculation** — Applies FAIR-CAM aligned control composites to derive adjusted FAIR inputs, then calculates residual ALE. The formula ensures:
+4. **Residual Risk Calculation** — Applies FAIR aligned control composites to derive adjusted FAIR inputs, then calculates residual ALE. The formula ensures:
    - A vendor with zero controls always produces residual risk equal to inherent risk (100% ratio)
    - High threat-capability attackers partially overcome resistance controls
    - Risk reduction scales proportionally to control quality across all three composites
 
-5. **Mitigation Recommendations** — Generates up to 7 prioritized control recommendations ranked by actual simulated marginal risk reduction (not static heuristics). Each recommendation includes its FAIR-CAM function label, category, priority, and whether implementing it would bring residual risk within risk appetite.
+5. **Mitigation Recommendations** — Generates up to 7 prioritized control recommendations ranked by actual simulated marginal risk reduction (not static heuristics). Each recommendation includes its FAIR function label, category, priority, and whether implementing it would bring residual risk within risk appetite.
 
 6. **Report Export** — Generates a detailed XLSX control review workbook and a PDF risk report for the assessment.
 
 ## Risk Model
 
-The platform uses the FAIR (Factor Analysis of Information Risk) model to produce dollar-denominated risk estimates, with controls applied according to FAIR-CAM v1.0.
+The platform uses a FAIR-based (Factor Analysis of Information Risk) model to produce dollar-denominated risk estimates.
 
 **Inherent risk** represents baseline exposure before any vendor controls are considered. It is driven by industry threat intelligence — how frequently threat actors target organizations in this sector, how capable those actors are, how likely they are to succeed, and the potential financial impact to your organization.
 
