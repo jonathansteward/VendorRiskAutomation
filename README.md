@@ -36,60 +36,19 @@ Given a vendor name, industry sector, and either uploaded security documents or 
 
 ## Risk Model
 
-### Inherent Risk
+The platform uses the FAIR (Factor Analysis of Information Risk) model to produce dollar-denominated risk estimates, with controls applied according to FAIR-CAM v1.0.
 
-```
-Inherent TEF  = contact_frequency × probability_of_action
-Inherent Risk = Inherent TEF × 1.0 (no controls) × loss_magnitude
-```
+**Inherent risk** represents baseline exposure before any vendor controls are considered. It is driven by industry threat intelligence — how frequently threat actors target organizations in this sector, how capable those actors are, how likely they are to succeed, and the potential financial impact to your organization.
 
-### Residual Risk (FAIR-CAM aligned)
+**Residual risk** adjusts the inherent baseline by applying the vendor's assessed control posture. Each control category maps to the specific part of the risk model it affects:
 
-Three control composites each affect a different FAIR component:
+- Governance controls reduce threat event frequency — strong policies and oversight make the vendor a less accessible target.
+- Access, Integration, and AI Risk controls reduce vulnerability — they lower the likelihood that a threat contact results in a successful breach.
+- Data Security and Availability controls limit loss magnitude — they reduce the financial impact when an incident does occur.
 
-**Composite 1 — Avoidance + Deterrence (→ Contact Frequency)**
-```
-effective_tef    = governance × 0.40 + access × 0.20
-adj_CF           = contact_frequency × (1 − effective_tef × 0.45)
-```
+A vendor with weak or absent controls will have residual risk near or equal to inherent risk. As control effectiveness improves, residual risk decreases. Third-party attestations (SOC 2 Type II, ISO 27001, penetration tests) provide additional confidence in the vendor's posture and are factored into the residual calculation. Self-attested controls are discounted to reflect the absence of independent verification.
 
-**Composite 2 — Resistance (→ Vulnerability / Susceptibility)**
-```
-resist_base      = mean(access, integration, ai_risk scores)
-effective_RS     = resist_base + governance × 0.40
-tc_scale         = 1.0 − threat_capability × 0.20   # high-TC attackers reduce control benefit
-adj_resistance   = max(RS_baseline, RS_baseline + effective_RS × 0.40 × tc_scale × (1 − RS_baseline))
-vuln_ratio       = (1 − adj_resistance) / (1 − RS_baseline)  # normalized; 1.0 when no controls
-```
-
-**Composite 3 — Detection + Response (→ Loss Magnitude)**
-```
-lm_base          = data_security × 0.50 + availability
-effective_LM     = lm_base + governance × 0.20
-adj_LM           = loss_magnitude × (1 − effective_LM × 0.40)
-```
-
-**Final residual:**
-```
-Residual TEF  = adj_CF × probability_of_action
-Residual Risk = Residual TEF × vuln_ratio × adj_LM
-```
-
-Monte Carlo simulation (10,000 iterations) over triangular distributions provides P10/P50/P90 confidence intervals for both inherent and residual risk.
-
-### Attestation Multipliers
-
-Third-party attestations adjust the effective resistance baseline upward:
-
-| Attestation | Multiplier |
-|---|---|
-| SOC 2 Type II | ×1.25 |
-| ISO 27001 | ×1.20 |
-| Penetration Test | ×1.15 |
-| Other | ×1.10 |
-| None | ×1.00 |
-
-Self-attested controls receive a 15% skepticism discount (×0.85).
+The platform also runs a Monte Carlo simulation across plausible ranges for all threat inputs, producing P10/P50/P90 confidence intervals to reflect the uncertainty inherent in sector-level threat data.
 
 ## Architecture
 
